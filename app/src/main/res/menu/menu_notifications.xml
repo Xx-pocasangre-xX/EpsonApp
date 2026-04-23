@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    menu_notifications.xml
+    Menú de opciones de la pantalla de Notificaciones (ActionBar).
+    Accesible con el ícono de 3 puntos verticales.
+-->
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_clear_all"
+        android:title="Borrar todo"
+        android:icon="@drawable/ic_delete"
+        app:showAsAction="ifRoom"/>
+
+</menu>

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    item_ink_level.xml
+    Componente reutilizable para mostrar el nivel de una tinta.
+    Se usa con <include> en fragment_dashboard.xml para cada color CMYK.
+
+    Contiene:
+    - Etiqueta del color (ej: "Negro")
+    - Barra de progreso
+    - Porcentaje numérico
+-->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:layout_marginBottom="8dp">
+
+    <!-- Nombre del color -->
+    <TextView
+        android:id="@+id/tvInkLabel"
+        android:layout_width="70dp"
+        android:layout_height="wrap_content"
+        android:text="Negro"
+        android:textSize="13sp"
+        android:textColor="@color/text_primary"/>
+
+    <!-- Barra de progreso (0-100) -->
+    <ProgressBar
+        android:id="@+id/progressInk"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="0dp"
+        android:layout_height="12dp"
+        android:layout_weight="1"
+        android:layout_marginHorizontal="8dp"
+        android:max="100"
+        android:progress="50"
+        android:progressTint="@color/ink_black"/>
+
+    <!-- Porcentaje -->
+    <TextView
+        android:id="@+id/tvInkPercent"
+        android:layout_width="40dp"
+        android:layout_height="wrap_content"
+        android:text="50%"
+        android:textSize="13sp"
+        android:textAlignment="textEnd"
+        android:textColor="@color/text_secondary"/>
+
+</LinearLayout>

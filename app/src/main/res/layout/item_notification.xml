@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    item_notification.xml
+    Ítem individual del RecyclerView de notificaciones.
+    Muestra: icono emoji, título, mensaje, recomendación, fecha y punto de no leído.
+-->
+<androidx.cardview.widget.CardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="12dp"
+    android:layout_marginVertical="4dp"
+    app:cardCornerRadius="10dp"
+    app:cardElevation="2dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:gravity="top">
+
+        <!-- Punto de "no leído" (círculo azul) -->
+        <View
+            android:id="@+id/viewUnreadDot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:layout_marginTop="6dp"
+            android:layout_marginEnd="8dp"
+            android:background="@drawable/circle_status"
+            android:backgroundTint="#2196F3"
+            android:visibility="gone"/>
+
+        <!-- Icono emoji del tipo de notificación -->
+        <TextView
+            android:id="@+id/tvNotifIcon"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:text="🔔"
+            android:textSize="22sp"
+            android:gravity="center"
+            android:layout_marginEnd="10dp"/>
+
+        <!-- Contenido de texto -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvNotifTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Título"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="@color/text_primary"/>
+
+            <TextView
+                android:id="@+id/tvNotifMessage"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Mensaje"
+                android:textSize="13sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginTop="2dp"/>
+
+            <!-- Recomendación (visible solo si existe) -->
+            <TextView
+                android:id="@+id/tvNotifRecommendation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textSize="12sp"
+                android:textColor="#FF6F00"
+                android:layout_marginTop="4dp"
+                android:visibility="gone"/>
+
+            <TextView
+                android:id="@+id/tvNotifDate"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="01/01/2025 10:00"
+                android:textSize="11sp"
+                android:textColor="@color/text_secondary"
+                android:layout_marginTop="4dp"/>
+
+        </LinearLayout>
+
+        <!-- Botón eliminar -->
+        <ImageButton
+            android:id="@+id/btnDeleteNotif"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:src="@drawable/ic_delete"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Eliminar notificación"
+            android:tint="@color/text_secondary"/>
+
+    </LinearLayout>
+</androidx.cardview.widget.CardView>

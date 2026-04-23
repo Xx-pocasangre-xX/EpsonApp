@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    data_extraction_rules.xml — Reglas de extracción de datos (Android 12+).
+    Reemplaza backup_rules.xml para dispositivos con Android 12 o superior.
+    Aplica las mismas exclusiones para Cloud Backup y Device-to-Device Transfer.
+-->
+<data-extraction-rules>
+
+    <!-- Backup en la nube (Google Drive) -->
+    <cloud-backup>
+        <exclude domain="database" path="epsonprint.db"/>
+        <exclude domain="database" path="epsonprint.db-shm"/>
+        <exclude domain="database" path="epsonprint.db-wal"/>
+        <exclude domain="cache"/>
+    </cloud-backup>
+
+    <!-- Transferencia entre dispositivos -->
+    <device-transfer>
+        <exclude domain="database" path="epsonprint.db"/>
+        <exclude domain="database" path="epsonprint.db-shm"/>
+        <exclude domain="database" path="epsonprint.db-wal"/>
+        <exclude domain="cache"/>
+    </device-transfer>
+
+</data-extraction-rules>

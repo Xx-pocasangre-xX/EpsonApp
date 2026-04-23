@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    backup_rules.xml — Reglas de Auto Backup (Android 6+).
+
+    Excluimos la base de datos Room porque contiene datos específicos de la red
+    local del usuario (IPs, historial de trabajos). Si el usuario restaura el
+    backup en otro dispositivo o red diferente, esos datos serían inútiles o
+    incorrectos.
+
+    Se incluye en el backup:
+    - Preferencias de usuario (configuración de la app)
+
+    Se excluye del backup:
+    - Base de datos Room (epsonprint.db y archivos auxiliares)
+    - Caché de imágenes escaneadas temporales
+-->
+<full-backup-content>
+    <!-- Excluir BD Room -->
+    <exclude domain="database" path="epsonprint.db"/>
+    <exclude domain="database" path="epsonprint.db-shm"/>
+    <exclude domain="database" path="epsonprint.db-wal"/>
+    <!-- Excluir caché de escaneos temporales -->
+    <exclude domain="cache" path="."/>
+</full-backup-content>

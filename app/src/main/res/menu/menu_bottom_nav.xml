@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    menu_bottom_nav.xml
+    Menú del BottomNavigationView.
+    Los IDs deben coincidir con los IDs del nav_graph para que
+    setupWithNavController() funcione automáticamente.
+-->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:id="@+id/dashboardFragment"
+        android:icon="@drawable/ic_home"
+        android:title="Inicio"/>
+
+    <item
+        android:id="@+id/printFragment"
+        android:icon="@drawable/ic_print"
+        android:title="Imprimir"/>
+
+    <item
+        android:id="@+id/scanFragment"
+        android:icon="@drawable/ic_scan"
+        android:title="Escanear"/>
+
+</menu>

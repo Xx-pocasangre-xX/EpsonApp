@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    fragment_dashboard.xml
+    Dashboard principal con:
+    - Sección estado impresora (nombre, IP, indicador de color)
+    - Niveles de tinta CMYK con barras de progreso
+    - Estado del papel
+    - Botones de acción: Imprimir / Escanear / Notificaciones
+-->
+<androidx.core.widget.NestedScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_light"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- ── CARD: Estado de la impresora ─────────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardElevation="4dp"
+            app:cardCornerRadius="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <!-- Título sección -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🖨️ Impresora"
+                    android:textSize="14sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginBottom="8dp"/>
+
+                <!-- Fila: indicador de estado + nombre -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="4dp">
+
+                    <!-- Círculo indicador de estado (verde/amarillo/rojo) -->
+                    <View
+                        android:id="@+id/viewStatusIndicator"
+                        android:layout_width="14dp"
+                        android:layout_height="14dp"
+                        android:background="@drawable/circle_status"
+                        android:backgroundTint="@color/status_unknown"
+                        android:layout_marginEnd="10dp"/>
+
+                    <!-- Nombre de la impresora -->
+                    <TextView
+                        android:id="@+id/tvPrinterName"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Sin impresora"
+                        android:textSize="18sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"/>
+
+                    <!-- Botón refrescar -->
+                    <ImageButton
+                        android:id="@+id/btnRefresh"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:src="@drawable/ic_refresh"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Refrescar estado"/>
+                </LinearLayout>
+
+                <!-- IP de la impresora -->
+                <TextView
+                    android:id="@+id/tvPrinterIp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textSize="13sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginBottom="8dp"/>
+
+                <!-- Estado textual -->
+                <TextView
+                    android:id="@+id/tvPrinterState"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Desconectada"
+                    android:textSize="14sp"
+                    android:textColor="@color/status_unknown"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- ── CARD: Niveles de tinta ─────────────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardInk"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardElevation="4dp"
+            app:cardCornerRadius="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🎨 Niveles de tinta"
+                    android:textSize="14sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Tinta Negra (Black) -->
+                <include layout="@layout/item_ink_level"
+                    android:id="@+id/inkBlack"/>
+
+                <!-- Tinta Cian -->
+                <include layout="@layout/item_ink_level"
+                    android:id="@+id/inkCyan"/>
+
+                <!-- Tinta Magenta -->
+                <include layout="@layout/item_ink_level"
+                    android:id="@+id/inkMagenta"/>
+
+                <!-- Tinta Amarilla -->
+                <include layout="@layout/item_ink_level"
+                    android:id="@+id/inkYellow"/>
+
+                <!-- Nota: EcoTank puede reportar -2 (ilimitado) -->
+                <TextView
+                    android:id="@+id/tvInkNote"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ℹ️ EcoTank: niveles estimados vía SNMP"
+                    android:textSize="11sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="8dp"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- ── CARD: Estado del papel ──────────────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            app:cardElevation="4dp"
+            app:cardCornerRadius="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="📄 Papel"
+                    android:textSize="14sp"
+                    android:textColor="@color/text_secondary"/>
+
+                <TextView
+                    android:id="@+id/tvPaperStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Desconocido"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/text_primary"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- ── BOTONES DE ACCIÓN PRINCIPALES ──────────────────────────── -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Acciones"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="@color/text_primary"
+            android:layout_marginBottom="12dp"/>
+
+        <!-- Botón Imprimir -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPrint"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:text="🖨️  Imprimir"
+            android:textSize="18sp"
+            android:layout_marginBottom="12dp"
+            app:cornerRadius="12dp"
+            style="@style/Widget.MaterialComponents.Button"/>
+
+        <!-- Botón Escanear -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnScan"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:text="🔍  Escanear"
+            android:textSize="18sp"
+            android:layout_marginBottom="12dp"
+            app:cornerRadius="12dp"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+        <!-- Botón Notificaciones -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnNotifications"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:textSize="18sp"
+            android:layout_marginBottom="12dp"
+            app:cornerRadius="12dp"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton">
+
+            <!-- El texto con badge se construye en código -->
+            <TextView
+                android:id="@+id/tvNotifBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🔔  Notificaciones"
+                android:textSize="18sp"/>
+
+        </com.google.android.material.button.MaterialButton>
+
+        <!-- ── Botón descubrimiento (si no hay impresora) ──────────────── -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDiscover"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🔎 Buscar impresora en la red"
+            android:layout_marginTop="8dp"
+            style="@style/Widget.MaterialComponents.Button.TextButton"/>
+
+        <!-- Progreso de descubrimiento -->
+        <LinearLayout
+            android:id="@+id/layoutDiscovering"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:visibility="gone"
+            android:layout_marginTop="8dp">
+
+            <ProgressBar
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_marginEnd="8dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Buscando impresora..."
+                android:textColor="@color/text_secondary"/>
+        </LinearLayout>
+
+        <!-- SwipeRefreshLayout wrapper (pull to refresh) -->
+        <!-- Nota: el pull-to-refresh se maneja en el Fragment con SwipeRefreshLayout -->
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

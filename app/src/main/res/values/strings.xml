@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    strings.xml — Todas las cadenas de texto de la aplicación.
+
+    Organizado por secciones:
+    1. App general
+    2. Dashboard
+    3. Impresión
+    4. Escaneo
+    5. Notificaciones
+    6. Errores y mensajes de estado
+    7. Diálogos de confirmación
+-->
+<resources>
+
+    <!-- ── 1. App general ─────────────────────────────────────────────── -->
+    <string name="app_name">EpsonPrint</string>
+    <string name="app_description">Control de Epson EcoTank L3560 sin SDK</string>
+
+    <!-- Pestañas de navegación -->
+    <string name="nav_home">Inicio</string>
+    <string name="nav_print">Imprimir</string>
+    <string name="nav_scan">Escanear</string>
+    <string name="nav_notifications">Notificaciones</string>
+
+    <!-- Botones comunes -->
+    <string name="btn_cancel">Cancelar</string>
+    <string name="btn_ok">Aceptar</string>
+    <string name="btn_retry">Reintentar</string>
+    <string name="btn_close">Cerrar</string>
+    <string name="btn_save">Guardar</string>
+    <string name="btn_delete">Eliminar</string>
+
+    <!-- ── 2. Dashboard ──────────────────────────────────────────────── -->
+    <string name="dashboard_title">EpsonPrint</string>
+    <string name="section_printer_status">🖨️ Impresora</string>
+    <string name="section_ink_levels">🎨 Niveles de tinta</string>
+    <string name="section_paper">📄 Papel</string>
+    <string name="section_actions">Acciones</string>
+
+    <!-- Estado de la impresora -->
+    <string name="printer_no_printer">Sin impresora configurada</string>
+    <string name="printer_state_idle">Lista para imprimir</string>
+    <string name="printer_state_processing">Imprimiendo…</string>
+    <string name="printer_state_stopped">Detenida</string>
+    <string name="printer_state_unknown">Estado desconocido</string>
+    <string name="printer_state_offline">Fuera de línea</string>
+    <string name="printer_no_wifi">Sin conexión WiFi</string>
+
+    <!-- Papel -->
+    <string name="paper_ok">Con papel</string>
+    <string name="paper_empty">Sin papel</string>
+    <string name="paper_low">Papel bajo</string>
+    <string name="paper_unknown">Desconocido</string>
+
+    <!-- Acciones del dashboard -->
+    <string name="btn_print">🖨️  Imprimir</string>
+    <string name="btn_scan">🔍  Escanear</string>
+    <string name="btn_notifications">🔔  Notificaciones</string>
+    <string name="btn_discover">🔎 Buscar impresora en la red</string>
+    <string name="btn_refresh">Refrescar estado</string>
+
+    <!-- Descubrimiento -->
+    <string name="discovering_printer">Buscando impresora…</string>
+    <string name="discovery_found">✅ Impresora encontrada: %s</string>
+    <string name="discovery_not_found">❌ No se encontró ninguna impresora en la red</string>
+    <string name="discovery_saved">Impresora guardada como predeterminada</string>
+    <string name="discovery_tip">Asegúrate de estar en la misma red WiFi que la impresora</string>
+
+    <!-- Tinta -->
+    <string name="ink_black">Negro</string>
+    <string name="ink_cyan">Cian</string>
+    <string name="ink_magenta">Magenta</string>
+    <string name="ink_yellow">Amarillo</string>
+    <string name="ink_ecotank_note">ℹ️ EcoTank: niveles estimados vía SNMP</string>
+    <string name="ink_unknown">N/D</string>
+    <string name="ink_unlimited">∞</string>
+    <string name="ink_percent">%d%%</string>
+
+    <!-- ── 3. Impresión ──────────────────────────────────────────────── -->
+    <string name="print_title">Imprimir</string>
+    <string name="btn_select_file">📂  Seleccionar archivo (PDF / Imagen)</string>
+    <string name="print_no_file">Ningún archivo seleccionado</string>
+    <string name="print_file_selected">Archivo: %s</string>
+    <string name="btn_print_action">🖨️  Imprimir</string>
+
+    <!-- Opciones de impresión -->
+    <string name="opt_paper_size">Tamaño de papel</string>
+    <string name="opt_color_mode">Modo de color</string>
+    <string name="opt_duplex">Doble cara</string>
+    <string name="opt_quality">Calidad</string>
+    <string name="opt_copies">Copias</string>
+
+    <!-- Tamaños de papel -->
+    <string name="paper_a4">A4 (210×297 mm)</string>
+    <string name="paper_letter">Carta (216×279 mm)</string>
+    <string name="paper_a3">A3 (297×420 mm)</string>
+    <string name="paper_photo_4x6">Foto 10×15 cm</string>
+
+    <!-- Modos de color -->
+    <string name="color_auto">Automático</string>
+    <string name="color_color">Color</string>
+    <string name="color_grayscale">Escala de grises</string>
+    <string name="color_monochrome">Monocromático</string>
+
+    <!-- Doble cara -->
+    <string name="duplex_one_sided">Una cara</string>
+    <string name="duplex_long_edge">Doble cara (borde largo)</string>
+    <string name="duplex_short_edge">Doble cara (borde corto)</string>
+
+    <!-- Calidad -->
+    <string name="quality_draft">Borrador</string>
+    <string name="quality_normal">Normal</string>
+    <string name="quality_high">Alta</string>
+
+    <!-- Estados de impresión -->
+    <string name="print_sending">Enviando trabajo de impresión…</string>
+    <string name="print_success">✅ Trabajo enviado a la impresora</string>
+    <string name="print_job_id">ID de trabajo: %d</string>
+    <string name="print_error">❌ Error: %s</string>
+    <string name="print_no_printer">No hay impresora configurada. Ve al Dashboard y busca una.</string>
+    <string name="print_no_paper">La impresora no tiene papel</string>
+    <string name="print_copies_label">%d copia(s)</string>
+
+    <!-- ── 4. Escaneo ────────────────────────────────────────────────── -->
+    <string name="scan_title">Escanear</string>
+    <string name="scan_ready">Listo para escanear</string>
+    <string name="scan_in_progress">Escaneando…</string>
+    <string name="scan_success">✅ Escaneo completado</string>
+    <string name="scan_error">❌ Error de escaneo: %s</string>
+    <string name="btn_scan_action">🔍  Escanear</string>
+    <string name="btn_crop">✂️  Recortar</string>
+    <string name="btn_save_gallery">🖼️ Galería</string>
+    <string name="btn_save_pdf">📄 PDF</string>
+
+    <!-- Opciones de escaneo -->
+    <string name="opt_resolution">Resolución (DPI)</string>
+    <string name="opt_color_mode_scan">Modo de color</string>
+    <string name="opt_scan_source">Fuente</string>
+    <string name="opt_scan_format">Formato de salida</string>
+
+    <!-- Resoluciones -->
+    <string name="res_75dpi">75 DPI (bajo)</string>
+    <string name="res_150dpi">150 DPI (medio)</string>
+    <string name="res_300dpi">300 DPI (recomendado)</string>
+    <string name="res_600dpi">600 DPI (alta calidad)</string>
+
+    <!-- Fuentes de escaneo -->
+    <string name="source_platen">Cristal (Flatbed)</string>
+    <string name="source_feeder">Alimentador (ADF)</string>
+
+    <!-- Formatos de salida -->
+    <string name="format_jpeg">JPEG</string>
+    <string name="format_png">PNG</string>
+    <string name="format_pdf">PDF</string>
+
+    <!-- Edición -->
+    <string name="edit_brightness">Brillo: %d</string>
+    <string name="edit_contrast">Contraste: %d</string>
+
+    <!-- Guardado -->
+    <string name="save_gallery_success">✅ Imagen guardada en la galería</string>
+    <string name="save_gallery_error">❌ No se pudo guardar en la galería</string>
+    <string name="save_pdf_success">✅ PDF guardado correctamente</string>
+    <string name="save_pdf_error">❌ No se pudo guardar el PDF</string>
+    <string name="scan_filename">Scan_%s</string>
+    <string name="pdf_filename">scan_%s.pdf</string>
+
+    <!-- ── 5. Notificaciones ─────────────────────────────────────────── -->
+    <string name="notif_title">Notificaciones</string>
+    <string name="notif_empty">Sin notificaciones</string>
+    <string name="notif_empty_hint">Las notificaciones de impresión y\nescaneo aparecerán aquí</string>
+    <string name="notif_unread_count">%d sin leer</string>
+    <string name="notif_all_read">Todo leído</string>
+    <string name="notif_swipe_hint">← Desliza para eliminar</string>
+    <string name="notif_deleted">Notificación eliminada</string>
+    <string name="notif_cleared">Historial borrado</string>
+    <string name="notif_clear_all">Borrar todo</string>
+    <string name="notif_clear_confirm_title">Borrar historial</string>
+    <string name="notif_clear_confirm_msg">¿Eliminar todas las notificaciones?</string>
+
+    <!-- Canales de notificación del sistema -->
+    <string name="notif_channel_print">Trabajos de impresión</string>
+    <string name="notif_channel_scan">Trabajos de escaneo</string>
+    <string name="notif_channel_alerts">Alertas de la impresora</string>
+    <string name="notif_channel_print_desc">Notificaciones sobre el estado de trabajos de impresión</string>
+    <string name="notif_channel_scan_desc">Notificaciones sobre el estado de trabajos de escaneo</string>
+    <string name="notif_channel_alerts_desc">Alertas de tinta baja, papel agotado y errores de impresora</string>
+
+    <!-- ── 6. Errores y mensajes de estado ──────────────────────────── -->
+    <string name="error_wifi_required">Conéctate a la misma red WiFi que la impresora</string>
+    <string name="error_printer_unreachable">No se puede contactar con la impresora en %s</string>
+    <string name="error_ipp_not_supported">La impresora no responde en el puerto IPP (631)</string>
+<string name="error_escl_not_supported">El escáner no responde por eSCL</string>
+<string name="error_timeout">Tiempo de espera agotado</string>
+<string name="error_unknown">Error desconocido: %s</string>
+<string name="error_file_read">No se pudo leer el archivo</string>
+<string name="error_no_printer_configured">Sin impresora. Ve al Dashboard → Buscar impresora</string>
+
+    <!-- Mensajes de alerta de tinta -->
+<string name="alert_ink_low_title">Tinta %s baja</string>
+<string name="alert_ink_low_msg">El nivel de tinta %s está al %d%%</string>
+<string name="alert_ink_low_rec">Recarga el depósito de tinta %s para evitar interrupciones</string>
+
+    <!-- ── 7. Diálogos de confirmación ─────────────────────────────── -->
+<string name="dialog_no_wifi_title">Sin conexión WiFi</string>
+<string name="dialog_no_wifi_msg">Esta aplicación necesita estar conectada a la misma red WiFi que la impresora Epson.</string>
+<string name="dialog_no_printer_title">Impresora no configurada</string>
+<string name="dialog_no_printer_msg">No se ha encontrado ninguna impresora. ¿Deseas buscar ahora?</string>
+<string name="dialog_search">Buscar</string>
+
+    <!-- FileProvider authority -->
+<string name="file_provider_authority">com.example.epsonprintapp.fileprovider</string>
+
+    </resources>

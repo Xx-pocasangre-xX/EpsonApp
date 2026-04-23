@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    fragment_print.xml
+    Pantalla de impresión con:
+    - Área de preview del archivo (PDF/imagen)
+    - Opciones de impresión: color, copias, doble cara, tamaño papel, calidad
+    - Botón "Seleccionar archivo" (SAF)
+    - Botón "Imprimir"
+    - Barra de progreso
+-->
+<androidx.core.widget.NestedScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_light">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- ── Preview del archivo ─────────────────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:padding="12dp"
+                android:minHeight="200dp">
+
+                <!-- Preview de imagen/PDF -->
+                <ImageView
+                    android:id="@+id/imagePreview"
+                    android:layout_width="match_parent"
+                    android:layout_height="200dp"
+                    android:scaleType="fitCenter"
+                    android:visibility="gone"
+                    android:contentDescription="Vista previa del archivo"/>
+
+                <!-- Placeholder cuando no hay archivo -->
+                <LinearLayout
+                    android:id="@+id/layoutNoFile"
+                    android:layout_width="match_parent"
+                    android:layout_height="200dp"
+                    android:orientation="vertical"
+                    android:gravity="center">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="📁"
+                        android:textSize="48sp"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Ningún archivo seleccionado"
+                        android:textSize="14sp"
+                        android:textColor="@color/text_secondary"
+                        android:layout_marginTop="8dp"/>
+                </LinearLayout>
+
+                <!-- Nombre del archivo seleccionado -->
+                <TextView
+                    android:id="@+id/tvFileName"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textSize="13sp"
+                    android:textColor="@color/text_secondary"
+                    android:gravity="center"
+                    android:layout_marginTop="8dp"
+                    android:maxLines="2"
+                    android:ellipsize="middle"
+                    android:visibility="gone"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Botón seleccionar archivo -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSelectFile"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="📂  Seleccionar archivo (PDF / Imagen)"
+            android:layout_marginBottom="16dp"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+        <!-- ── CARD: Opciones de impresión ─────────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="⚙️ Opciones de impresión"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/text_primary"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Tamaño de papel -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Tamaño de papel"
+                    android:textSize="13sp"
+                    android:textColor="@color/text_secondary"/>
+                <Spinner
+                    android:id="@+id/spinnerPaperSize"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Modo color -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Modo de color"
+                    android:textSize="13sp"
+                    android:textColor="@color/text_secondary"/>
+                <Spinner
+                    android:id="@+id/spinnerColorMode"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Doble cara -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Doble cara"
+                    android:textSize="13sp"
+                    android:textColor="@color/text_secondary"/>
+                <Spinner
+                    android:id="@+id/spinnerDuplex"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Calidad -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Calidad"
+                    android:textSize="13sp"
+                    android:textColor="@color/text_secondary"/>
+                <Spinner
+                    android:id="@+id/spinnerQuality"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Número de copias -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Copias"
+                        android:textSize="13sp"
+                        android:textColor="@color/text_secondary"/>
+
+                    <TextView
+                        android:id="@+id/tvCopiesValue"
+                        android:layout_width="40dp"
+                        android:layout_height="wrap_content"
+                        android:text="1"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:gravity="center"/>
+                </LinearLayout>
+
+                <SeekBar
+                    android:id="@+id/seekCopies"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="19"
+                    android:progress="0"
+                    android:layout_marginTop="4dp"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Mensaje de estado -->
+        <TextView
+            android:id="@+id/tvPrintStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="14sp"
+            android:textColor="@color/text_secondary"
+            android:gravity="center"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Barra de progreso (visible durante impresión) -->
+        <ProgressBar
+            android:id="@+id/progressPrint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:layout_marginBottom="12dp"/>
+
+        <!-- Botón Imprimir -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPrint"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="🖨️  Imprimir"
+            android:textSize="17sp"
+            android:enabled="false"
+            android:layout_marginBottom="24dp"
+            app:cornerRadius="12dp"
+            style="@style/Widget.MaterialComponents.Button"/>
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

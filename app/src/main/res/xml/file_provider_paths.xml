@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    file_provider_paths.xml — Rutas accesibles para el FileProvider.
+
+    FileProvider permite compartir URIs de archivos de forma segura entre
+    aplicaciones (por ejemplo, para abrir un PDF escaneado en otra app o
+    para que UCrop acceda a imágenes temporales).
+
+    Directorios configurados:
+    1. cache-path:    /data/data/com.example.epsonprintapp/cache/
+       → Usado para imágenes temporales de UCrop y previsualizaciones
+    2. external-cache-path: /sdcard/Android/data/com.example.epsonprintapp/cache/
+       → Alternativa externa para compatibilidad con UCrop en Android 9+
+    3. files-path:    /data/data/com.example.epsonprintapp/files/
+       → Archivos internos (PDFs generados antes de mover a MediaStore)
+
+    Nota: Los escaneos finales se guardan vía MediaStore (no requieren FileProvider).
+    El FileProvider solo se usa para el flujo temporal de UCrop.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Caché interna: imágenes temporales para UCrop y preview -->
+    <cache-path
+        name="epsonprint_cache"
+        path="."/>
+
+    <!-- Caché externa: necesaria para UCrop en algunos dispositivos -->
+    <external-cache-path
+        name="epsonprint_external_cache"
+        path="."/>
+
+    <!-- Archivos internos: PDFs temporales antes de exportar -->
+    <files-path
+        name="epsonprint_files"
+        path="."/>
+
+    <!-- Almacenamiento externo de la app (Android 10+) -->
+    <external-files-path
+        name="epsonprint_external_files"
+        path="."/>
+
+</paths>

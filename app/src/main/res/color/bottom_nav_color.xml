@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    bottom_nav_color.xml (en /res/color/)
+    ColorStateList para los íconos y texto del BottomNavigationView.
+    - Seleccionado: color primario (azul Epson)
+    - No seleccionado: gris secundario
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true"  android:color="@color/md_theme_light_primary"/>
+    <item android:state_checked="false" android:color="@color/text_secondary"/>
+</selector>

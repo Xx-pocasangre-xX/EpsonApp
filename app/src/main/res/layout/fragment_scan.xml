@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    fragment_scan.xml
+    Pantalla de escaneo eSCL con:
+    - Opciones de escaneo (resolución, color, fuente, formato)
+    - Botón "Escanear"
+    - ImageView de previsualización
+    - Herramientas de edición (brillo, contraste)
+    - Botones de guardado (galería / PDF)
+-->
+<androidx.core.widget.NestedScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_light">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- ── CARD: Opciones de escaneo ──────────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="⚙️ Opciones de escaneo"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/text_primary"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Resolución -->
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Resolución (DPI)" android:textSize="13sp"
+                    android:textColor="@color/text_secondary"/>
+                <Spinner android:id="@+id/spinnerResolution"
+                    android:layout_width="match_parent" android:layout_height="48dp"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Modo de color -->
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Modo de color" android:textSize="13sp"
+                    android:textColor="@color/text_secondary"/>
+                <Spinner android:id="@+id/spinnerColor"
+                    android:layout_width="match_parent" android:layout_height="48dp"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Fuente de escaneo -->
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Fuente" android:textSize="13sp"
+                    android:textColor="@color/text_secondary"/>
+                <Spinner android:id="@+id/spinnerSource"
+                    android:layout_width="match_parent" android:layout_height="48dp"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Formato de salida -->
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Formato de salida" android:textSize="13sp"
+                    android:textColor="@color/text_secondary"/>
+                <Spinner android:id="@+id/spinnerFormat"
+                    android:layout_width="match_parent" android:layout_height="48dp"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Estado y progreso -->
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Listo para escanear"
+            android:textSize="14sp"
+            android:textColor="@color/text_secondary"
+            android:gravity="center"
+            android:layout_marginBottom="4dp"/>
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Botón Escanear -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnScan"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="🔍  Escanear"
+            android:textSize="17sp"
+            android:layout_marginBottom="16dp"
+            app:cornerRadius="12dp"
+            style="@style/Widget.MaterialComponents.Button"/>
+
+        <!-- ── Preview del escaneo ──────────────────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp">
+
+            <ImageView
+                android:id="@+id/imagePreview"
+                android:layout_width="match_parent"
+                android:layout_height="280dp"
+                android:scaleType="fitCenter"
+                android:background="#F5F5F5"
+                android:contentDescription="Vista previa del escaneo"/>
+
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- ── CARD: Herramientas de edición (ocultas hasta que haya escaneo) -->
+        <LinearLayout
+            android:id="@+id/layoutEditTools"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="4dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="✏️ Edición"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"
+                        android:layout_marginBottom="12dp"/>
+
+                    <!-- Brillo -->
+                    <TextView
+                        android:id="@+id/tvBrightnessValue"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Brillo: 100"
+                        android:textSize="13sp"
+                        android:textColor="@color/text_secondary"/>
+                    <SeekBar
+                        android:id="@+id/seekBrightness"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"/>
+
+                    <!-- Contraste -->
+                    <TextView
+                        android:id="@+id/tvContrastValue"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Contraste: 100"
+                        android:textSize="13sp"
+                        android:textColor="@color/text_secondary"/>
+                    <SeekBar
+                        android:id="@+id/seekContrast"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"/>
+
+                    <!-- Botón Recortar (UCrop) -->
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnCrop"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="✂️  Recortar"
+                        android:enabled="false"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Botones de guardado -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="24dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSaveGallery"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="6dp"
+                    android:text="🖼️ Galería"
+                    android:enabled="false"
+                    style="@style/Widget.MaterialComponents.Button"/>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSavePdf"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="6dp"
+                    android:text="📄 PDF"
+                    android:enabled="false"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

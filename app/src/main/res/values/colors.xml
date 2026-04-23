@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    colors.xml
+    Paleta de colores completa de EpsonPrint.
+
+    Colores del tema (Material3 - tonos azul corporativo):
+    - Primary:   Azul Epson  #1565C0
+    - Secondary: Cian claro  #0097A7
+    - Surface:   Blanco
+    - Error:     Rojo        #B00020
+
+    Colores semánticos para el estado de la impresora:
+    - status_online   (verde)
+    - status_warning  (amarillo)
+    - status_error    (rojo)
+    - status_unknown  (gris)
+
+    Colores de tinta CMYK para las barras de progreso:
+    - ink_black, ink_cyan, ink_magenta, ink_yellow
+-->
+<resources>
+
+    <!-- ── Material3 Seed / Primary ─────────────────────────────────────── -->
+    <color name="md_theme_light_primary">#1565C0</color>
+    <color name="md_theme_light_onPrimary">#FFFFFF</color>
+    <color name="md_theme_light_primaryContainer">#D6E4FF</color>
+    <color name="md_theme_light_onPrimaryContainer">#001848</color>
+
+    <color name="md_theme_light_secondary">#0097A7</color>
+    <color name="md_theme_light_onSecondary">#FFFFFF</color>
+    <color name="md_theme_light_secondaryContainer">#CCF4F8</color>
+    <color name="md_theme_light_onSecondaryContainer">#002A2D</color>
+
+    <color name="md_theme_light_tertiary">#6650A4</color>
+    <color name="md_theme_light_onTertiary">#FFFFFF</color>
+
+    <color name="md_theme_light_error">#B3261E</color>
+    <color name="md_theme_light_onError">#FFFFFF</color>
+    <color name="md_theme_light_errorContainer">#F9DEDC</color>
+    <color name="md_theme_light_onErrorContainer">#410E0B</color>
+
+    <color name="md_theme_light_background">#FAFCFF</color>
+    <color name="md_theme_light_onBackground">#1A1C1E</color>
+    <color name="md_theme_light_surface">#FAFCFF</color>
+    <color name="md_theme_light_onSurface">#1A1C1E</color>
+    <color name="md_theme_light_surfaceVariant">#DFE2EB</color>
+    <color name="md_theme_light_onSurfaceVariant">#42474E</color>
+    <color name="md_theme_light_outline">#73777F</color>
+
+    <!-- Dark theme -->
+    <color name="md_theme_dark_primary">#A8C8FF</color>
+    <color name="md_theme_dark_onPrimary">#002E6A</color>
+    <color name="md_theme_dark_primaryContainer">#004494</color>
+    <color name="md_theme_dark_onPrimaryContainer">#D6E4FF</color>
+    <color name="md_theme_dark_secondary">#80D8E4</color>
+    <color name="md_theme_dark_onSecondary">#003F47</color>
+    <color name="md_theme_dark_background">#1A1C1E</color>
+    <color name="md_theme_dark_onBackground">#E2E2E6</color>
+    <color name="md_theme_dark_surface">#1A1C1E</color>
+    <color name="md_theme_dark_onSurface">#E2E2E6</color>
+    <color name="md_theme_dark_error">#F2B8B5</color>
+    <color name="md_theme_dark_onError">#601410</color>
+
+    <!-- ── Colores de acceso rápido (usados en código) ────────────────── -->
+    <color name="background_light">#F0F4F8</color>
+    <color name="text_primary">#1A1C1E</color>
+    <color name="text_secondary">#5C6370</color>
+    <color name="divider">#E0E0E0</color>
+
+    <!-- ── Estado de la impresora ─────────────────────────────────────── -->
+    <color name="status_online">#2E7D32</color>    <!-- Verde oscuro -->
+    <color name="status_warning">#F57F17</color>   <!-- Ámbar -->
+    <color name="status_error">#C62828</color>     <!-- Rojo -->
+    <color name="status_unknown">#9E9E9E</color>   <!-- Gris -->
+    <color name="status_processing">#1565C0</color> <!-- Azul (imprimiendo) -->
+
+    <!-- ── Niveles de tinta CMYK ──────────────────────────────────────── -->
+    <color name="ink_black">#212121</color>        <!-- Negro -->
+    <color name="ink_cyan">#0097A7</color>         <!-- Cian -->
+    <color name="ink_magenta">#AD1457</color>      <!-- Magenta -->
+    <color name="ink_yellow">#F9A825</color>       <!-- Amarillo -->
+
+    <!-- Umbral de tinta baja (para colorear la barra en rojo) -->
+    <color name="ink_low">#EF5350</color>          <!-- Rojo claro -->
+    <color name="ink_medium">#FFA726</color>       <!-- Naranja -->
+    <color name="ink_high">#66BB6A</color>         <!-- Verde -->
+
+    <!-- ── Notificaciones por severidad ──────────────────────────────── -->
+    <color name="notif_error_bg">#FFEBEE</color>   <!-- Fondo rojo muy claro -->
+    <color name="notif_warning_bg">#FFF8E1</color> <!-- Fondo amarillo muy claro -->
+    <color name="notif_success_bg">#F1F8E9</color> <!-- Fondo verde muy claro -->
+    <color name="notif_info_bg">#E3F2FD</color>    <!-- Fondo azul muy claro -->
+
+    <!-- Colores legacy requeridos por algunas dependencias -->
+    <color name="colorPrimary">@color/md_theme_light_primary</color>
+    <color name="colorPrimaryDark">#003C8F</color>
+    <color name="colorAccent">@color/md_theme_light_secondary</color>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+</resources>

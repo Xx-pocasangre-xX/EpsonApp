@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    nav_graph.xml — Grafo de navegación de la aplicación.
+
+    Fragmentos y sus conexiones:
+    ┌─────────────────────────────────────────────────────────┐
+    │  DashboardFragment (inicio)                             │
+    │    ├──▶ PrintFragment       (botón Imprimir)            │
+    │    ├──▶ ScanFragment        (botón Escanear)            │
+    │    └──▶ NotificationsFragment (botón Notificaciones)    │
+    └─────────────────────────────────────────────────────────┘
+
+    PrintFragment y ScanFragment también son accesibles desde
+    el BottomNavigationView (destinos top-level).
+-->
+<navigation
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/dashboardFragment">
+
+    <!-- ── Dashboard (pantalla inicial) ────────────────────────────────────── -->
+    <fragment
+        android:id="@+id/dashboardFragment"
+        android:name="com.example.epsonprintapp.ui.dashboard.DashboardFragment"
+        android:label="EpsonPrint"
+        tools:layout="@layout/fragment_dashboard">
+
+        <!-- Navegar a Imprimir -->
+        <action
+            android:id="@+id/action_dashboard_to_print"
+            app:destination="@id/printFragment"
+            app:enterAnim="@anim/slide_in_right"
+            app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left"
+            app:popExitAnim="@anim/slide_out_right"/>
+
+        <!-- Navegar a Escanear -->
+        <action
+            android:id="@+id/action_dashboard_to_scan"
+            app:destination="@id/scanFragment"
+            app:enterAnim="@anim/slide_in_right"
+            app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left"
+            app:popExitAnim="@anim/slide_out_right"/>
+
+        <!-- Navegar a Notificaciones -->
+        <action
+            android:id="@+id/action_dashboard_to_notifications"
+            app:destination="@id/notificationsFragment"
+            app:enterAnim="@anim/slide_in_right"
+            app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left"
+            app:popExitAnim="@anim/slide_out_right"/>
+
+    </fragment>
+
+    <!-- ── Pantalla de impresión ────────────────────────────────────────────── -->
+    <fragment
+        android:id="@+id/printFragment"
+        android:name="com.example.epsonprintapp.ui.print.PrintFragment"
+        android:label="Imprimir"
+        tools:layout="@layout/fragment_print"/>
+
+    <!-- ── Pantalla de escaneo ──────────────────────────────────────────────── -->
+    <fragment
+        android:id="@+id/scanFragment"
+        android:name="com.example.epsonprintapp.ui.scan.ScanFragment"
+        android:label="Escanear"
+        tools:layout="@layout/fragment_scan"/>
+
+    <!-- ── Pantalla de notificaciones ──────────────────────────────────────── -->
+    <fragment
+        android:id="@+id/notificationsFragment"
+        android:name="com.example.epsonprintapp.ui.notifications.NotificationsFragment"
+        android:label="Notificaciones"
+        tools:layout="@layout/fragment_notifications"/>
+
+</navigation>
