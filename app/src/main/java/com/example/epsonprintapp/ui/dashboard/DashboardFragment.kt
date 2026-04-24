@@ -12,42 +12,14 @@ import androidx.fragment.app.viewModels
 import androidx.navigation.fragment.findNavController
 import com.example.epsonprintapp.R
 import com.example.epsonprintapp.databinding.FragmentDashboardBinding
+import com.example.epsonprintapp.databinding.ItemInkLevelBinding
 import com.example.epsonprintapp.printer.PrinterState
 
-/**
- * DashboardFragment - Pantalla principal de la aplicación
- *
- * DISEÑO DE LA PANTALLA:
- * ======================
- * ┌────────────────────────────────┐
- * │ 🖨️ EPSON EcoTank L3560         │  ← Nombre de impresora
- * │ 🟢 Lista | 192.168.1.10        │  ← Estado + IP
- * ├────────────────────────────────┤
- * │ NIVELES DE TINTA               │
- * │ 🔵 Cyan    ████████░░ 80%      │
- * │ 🔴 Magenta █████░░░░░ 50%      │
- * │ 🟡 Yellow  ███████░░░ 70%      │
- * │ ⚫ Black   ██████████ 90%      │
- * ├────────────────────────────────┤
- * │ 📄 Papel: Con papel            │
- * ├────────────────────────────────┤
- * │ [🖨️ IMPRIMIR] [🔍 ESCANEAR]    │
- * │      [🔔 NOTIFICACIONES]       │
- * └────────────────────────────────┘
- *
- * OBSERVACIÓN DE LIVEDATA:
- * La UI "observa" los datos del ViewModel.
- * Cuando el ViewModel actualiza un valor, la UI reacciona automáticamente.
- * No hay polling manual ni callbacks anidados.
- */
 class DashboardFragment : Fragment() {
 
-    // ViewBinding: evita findViewById y garantiza type-safety
     private var _binding: FragmentDashboardBinding? = null
     private val binding get() = _binding!!
 
-    // ViewModel con la lógica de negocio
-    // 'by viewModels()' crea el VM con el scope del Fragment
     private val viewModel: DashboardViewModel by viewModels()
 
     override fun onCreateView(
@@ -65,67 +37,42 @@ class DashboardFragment : Fragment() {
         setupClickListeners()
     }
 
-    // =========================================================================
-    // OBSERVERS - Reaccionar a cambios en el ViewModel
-    // =========================================================================
+    // ── Observers ──────────────────────────────────────────────────────────────
 
     private fun setupObservers() {
 
-        // Observar estado de carga
-        viewModel.isLoading.observe(viewLifecycleOwner) { isLoading ->
-            binding.progressBar.isVisible = isLoading
-            binding.swipeRefresh.isRefreshing = isLoading
-        }
-
-        // Observar si hay WiFi
         viewModel.isWifiConnected.observe(viewLifecycleOwner) { isConnected ->
-            binding.wifiWarning.isVisible = !isConnected
-            binding.mainContent.isVisible = isConnected
+            if (!isConnected) {
+                Toast.makeText(requireContext(),
+                    "Sin conexión WiFi. Conéctate a la misma red que la impresora.",
+                    Toast.LENGTH_LONG).show()
+            }
         }
 
-        // Observar impresora actual
         viewModel.currentPrinter.observe(viewLifecycleOwner) { printer ->
             if (printer != null) {
-                binding.textPrinterName.text = printer.name
-                binding.textPrinterModel.text = printer.model ?: "Epson EcoTank"
-                binding.textPrinterIp.text = "📡 ${printer.ipAddress}:${printer.ippPort}"
-                binding.noPrinterLayout.isVisible = false
-                binding.printerInfoCard.isVisible = true
+                binding.tvPrinterName.text = printer.name
+                binding.tvPrinterIp.text   = "📡 ${printer.ipAddress}:${printer.ippPort}"
             } else {
-                binding.noPrinterLayout.isVisible = true
-                binding.printerInfoCard.isVisible = false
+                binding.tvPrinterName.text = getString(R.string.printer_no_printer)
+                binding.tvPrinterIp.text   = ""
             }
         }
 
-        // Observar estado detallado de la impresora
         viewModel.printerStatus.observe(viewLifecycleOwner) { status ->
-            if (status != null) {
-                updatePrinterStatusUI(status)
-            } else {
-                showOfflineState()
-            }
+            if (status != null) updatePrinterStatusUI(status)
+            else showOfflineState()
         }
 
-        // Observar proceso de descubrimiento
         viewModel.isDiscovering.observe(viewLifecycleOwner) { isDiscovering ->
-            binding.discoveryProgressBar.isVisible = isDiscovering
-            binding.textDiscovering.isVisible = isDiscovering
-            if (isDiscovering) {
-                binding.textDiscovering.text = "🔍 Buscando impresoras en la red..."
-            }
+            binding.layoutDiscovering.isVisible = isDiscovering
         }
 
-        // Observar contador de notificaciones no leídas (badge)
         viewModel.unreadNotificationCount.observe(viewLifecycleOwner) { count ->
-            if (count > 0) {
-                binding.badgeNotifications.isVisible = true
-                binding.badgeNotifications.text = if (count > 99) "99+" else count.toString()
-            } else {
-                binding.badgeNotifications.isVisible = false
-            }
+            val label = if (count > 0) "🔔  Notificaciones ($count)" else "🔔  Notificaciones"
+            binding.btnNotifications.text = label
         }
 
-        // Observar mensajes de error
         viewModel.errorMessage.observe(viewLifecycleOwner) { error ->
             error?.let {
                 Toast.makeText(requireContext(), it, Toast.LENGTH_LONG).show()
@@ -134,179 +81,110 @@ class DashboardFragment : Fragment() {
         }
     }
 
-    // =========================================================================
-    // CLICK LISTENERS
-    // =========================================================================
+    // ── Click listeners ────────────────────────────────────────────────────────
 
     private fun setupClickListeners() {
-        // Botón IMPRIMIR → navegar a PrintFragment
-        binding.buttonPrint.setOnClickListener {
+        binding.btnPrint.setOnClickListener {
             findNavController().navigate(R.id.action_dashboard_to_print)
         }
-
-        // Botón ESCANEAR → navegar a ScanFragment
-        binding.buttonScan.setOnClickListener {
+        binding.btnScan.setOnClickListener {
             findNavController().navigate(R.id.action_dashboard_to_scan)
         }
-
-        // Botón NOTIFICACIONES → navegar a NotificationsFragment
-        binding.buttonNotifications.setOnClickListener {
+        binding.btnNotifications.setOnClickListener {
             findNavController().navigate(R.id.action_dashboard_to_notifications)
         }
-
-        // Pull-to-refresh → actualizar estado de impresora
-        binding.swipeRefresh.setOnRefreshListener {
+        binding.btnRefresh.setOnClickListener {
             viewModel.refreshPrinterStatus()
         }
-
-        // Botón buscar impresoras (cuando no hay ninguna)
-        binding.buttonSearchPrinter.setOnClickListener {
+        binding.btnDiscover.setOnClickListener {
             viewModel.discoverPrinters()
         }
-
-        // Toque en la tarjeta de impresora → ver detalles
-        binding.printerInfoCard.setOnClickListener {
-            // TODO: Navegar a pantalla de detalles de impresora
-        }
     }
 
-    // =========================================================================
-    // ACTUALIZACIÓN DE UI
-    // =========================================================================
+    // ── UI update ──────────────────────────────────────────────────────────────
 
-    /**
-     * Actualizar toda la UI de estado de impresora
-     *
-     * Esta función es el corazón del dashboard:
-     * Traduce el estado técnico de la impresora en una UI visual clara.
-     */
     private fun updatePrinterStatusUI(status: com.example.epsonprintapp.printer.PrinterStatus) {
 
-        // ===== ESTADO PRINCIPAL =====
-        binding.textPrinterStatus.text = status.displayStatus
+        binding.tvPrinterState.text = status.displayStatus
 
-        // Color del indicador de estado
         val statusColor = when (status.state) {
-            PrinterState.IDLE -> {
-                if (status.hasPaper) {
-                    ContextCompat.getColor(requireContext(), R.color.status_ready)   // Verde
-                } else {
-                    ContextCompat.getColor(requireContext(), R.color.status_warning) // Naranja
-                }
-            }
-            PrinterState.PROCESSING -> ContextCompat.getColor(requireContext(), R.color.status_printing) // Azul
-            PrinterState.STOPPED -> ContextCompat.getColor(requireContext(), R.color.status_error)       // Rojo
-            PrinterState.UNKNOWN -> ContextCompat.getColor(requireContext(), R.color.status_offline)     // Gris
+            PrinterState.IDLE       -> ContextCompat.getColor(requireContext(),
+                if (status.hasPaper) R.color.status_online else R.color.status_warning)
+            PrinterState.PROCESSING -> ContextCompat.getColor(requireContext(), R.color.status_processing)
+            PrinterState.STOPPED    -> ContextCompat.getColor(requireContext(), R.color.status_error)
+            PrinterState.UNKNOWN    -> ContextCompat.getColor(requireContext(), R.color.status_unknown)
         }
-        binding.statusIndicator.setBackgroundColor(statusColor)
+        binding.viewStatusIndicator.backgroundTintList =
+            android.content.res.ColorStateList.valueOf(statusColor)
 
-        // ===== ESTADO DEL PAPEL =====
-        if (status.hasPaper) {
-            binding.textPaperStatus.text = "📄 Con papel"
-            binding.textPaperStatus.setTextColor(
-                ContextCompat.getColor(requireContext(), R.color.text_success)
-            )
-        } else {
-            binding.textPaperStatus.text = "⚠️ Sin papel"
-            binding.textPaperStatus.setTextColor(
-                ContextCompat.getColor(requireContext(), R.color.text_warning)
-            )
-        }
+        binding.tvPaperStatus.text = if (status.hasPaper) "Con papel ✅" else "Sin papel ⚠️"
+        binding.tvPaperStatus.setTextColor(
+            ContextCompat.getColor(requireContext(),
+                if (status.hasPaper) R.color.status_online else R.color.status_warning)
+        )
 
-        // ===== NIVELES DE TINTA =====
-        val inkLevels = status.inkLevels
-        if (inkLevels.isAvailable) {
-            binding.inkLevelsCard.isVisible = true
+        val ink = status.inkLevels
+        binding.cardInk.isVisible = ink.isAvailable
 
-            // Función auxiliar para actualizar cada barra de tinta
-            fun updateInkBar(level: Int,
-                             progressBar: android.widget.ProgressBar,
-                             textLevel: android.widget.TextView,
-                             colorRes: Int) {
-                if (level >= 0) {
-                    progressBar.progress = level
-                    textLevel.text = "$level%"
-                    // Cambiar color según nivel: rojo si < 20%, verde si > 50%
-                    val barColor = when {
-                        level < 20 -> ContextCompat.getColor(requireContext(), R.color.ink_critical)
-                        level < 50 -> ContextCompat.getColor(requireContext(), R.color.ink_low)
-                        else -> colorRes
-                    }
-                    progressBar.progressTintList =
-                        android.content.res.ColorStateList.valueOf(barColor)
-                    progressBar.isVisible = true
-                    textLevel.isVisible = true
-                } else {
-                    progressBar.isVisible = false
-                    textLevel.isVisible = false
-                }
-            }
-
-            // Actualizar cada color de tinta
-            updateInkBar(
-                inkLevels.cyan,
-                binding.progressCyan,
-                binding.textCyanLevel,
-                ContextCompat.getColor(requireContext(), R.color.ink_cyan)
-            )
-            updateInkBar(
-                inkLevels.magenta,
-                binding.progressMagenta,
-                binding.textMagentaLevel,
-                ContextCompat.getColor(requireContext(), R.color.ink_magenta)
-            )
-            updateInkBar(
-                inkLevels.yellow,
-                binding.progressYellow,
-                binding.textYellowLevel,
-                ContextCompat.getColor(requireContext(), R.color.ink_yellow)
-            )
-            updateInkBar(
-                inkLevels.black,
-                binding.progressBlack,
-                binding.textBlackLevel,
-                ContextCompat.getColor(requireContext(), R.color.ink_black)
-            )
-
-        } else {
-            // La impresora no reporta niveles de tinta via IPP
-            binding.inkLevelsCard.isVisible = false
-            binding.inkNotAvailable.isVisible = true
+        if (ink.isAvailable) {
+            // FIX: ViewBinding turns each <include> into an ItemInkLevelBinding, not a View
+            updateInkRow(binding.inkBlack,   "Negro",    ink.black,   R.color.ink_black)
+            updateInkRow(binding.inkCyan,    "Cian",     ink.cyan,    R.color.ink_cyan)
+            updateInkRow(binding.inkMagenta, "Magenta",  ink.magenta, R.color.ink_magenta)
+            updateInkRow(binding.inkYellow,  "Amarillo", ink.yellow,  R.color.ink_yellow)
         }
 
-        // ===== HABILITAR/DESHABILITAR BOTONES =====
         val canPrint = status.state == PrinterState.IDLE && status.hasPaper
-        val canScan = status.state != PrinterState.STOPPED
-
-        binding.buttonPrint.isEnabled = canPrint
-        binding.buttonPrint.alpha = if (canPrint) 1.0f else 0.5f
-
-        binding.buttonScan.isEnabled = canScan
-        binding.buttonScan.alpha = if (canScan) 1.0f else 0.5f
+        val canScan  = status.state != PrinterState.STOPPED
+        binding.btnPrint.isEnabled = canPrint
+        binding.btnPrint.alpha     = if (canPrint) 1f else 0.5f
+        binding.btnScan.isEnabled  = canScan
+        binding.btnScan.alpha      = if (canScan) 1f else 0.5f
     }
 
     /**
-     * Mostrar estado offline cuando no se puede conectar a la impresora
+     * When ViewBinding is enabled, <include> tags with an android:id become
+     * typed binding objects (ItemInkLevelBinding), not raw Views.
+     * Access child views directly through the binding instead of findViewById.
      */
-    private fun showOfflineState() {
-        binding.textPrinterStatus.text = "Desconectada"
-        binding.statusIndicator.setBackgroundColor(
-            ContextCompat.getColor(requireContext(), R.color.status_offline)
-        )
-        binding.textPaperStatus.text = "Estado desconocido"
-        binding.inkLevelsCard.isVisible = false
-        binding.buttonPrint.isEnabled = false
-        binding.buttonScan.isEnabled = false
+    private fun updateInkRow(
+        inkBinding: ItemInkLevelBinding,
+        label: String,
+        level: Int,
+        colorRes: Int
+    ) {
+        inkBinding.tvInkLabel.text = label
+
+        if (level >= 0) {
+            inkBinding.progressInk.progress = level
+            inkBinding.tvInkPercent.text    = "$level%"
+            val barColor = when {
+                level < 20 -> ContextCompat.getColor(requireContext(), R.color.ink_low)
+                level < 50 -> ContextCompat.getColor(requireContext(), R.color.ink_medium)
+                else       -> ContextCompat.getColor(requireContext(), colorRes)
+            }
+            inkBinding.progressInk.progressTintList =
+                android.content.res.ColorStateList.valueOf(barColor)
+            inkBinding.root.isVisible = true
+        } else {
+            inkBinding.tvInkPercent.text    = "N/D"
+            inkBinding.progressInk.progress = 0
+        }
     }
 
-    // =========================================================================
-    // CICLO DE VIDA
-    // =========================================================================
+    private fun showOfflineState() {
+        binding.tvPrinterState.text = getString(R.string.printer_state_offline)
+        binding.viewStatusIndicator.backgroundTintList =
+            android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(requireContext(), R.color.status_unknown)
+            )
+        binding.tvPaperStatus.text = getString(R.string.paper_unknown)
+        binding.btnPrint.isEnabled = false
+        binding.btnScan.isEnabled  = false
+    }
 
     override fun onDestroyView() {
         super.onDestroyView()
-        // IMPORTANTE: Limpiar binding para evitar memory leaks
-        // El Fragment puede destruirse pero el ViewModel sobrevive
         _binding = null
     }
 }

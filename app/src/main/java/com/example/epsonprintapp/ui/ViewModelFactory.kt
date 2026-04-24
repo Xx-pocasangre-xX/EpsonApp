@@ -1,5 +1,6 @@
 package com.example.epsonprintapp.ui
 
+import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.epsonprintapp.database.AppDatabase
@@ -16,20 +17,14 @@ import com.example.epsonprintapp.ui.scan.ScanViewModel
 /**
  * ViewModelFactory — Fábrica central para todos los ViewModels.
  *
- * Kotlin no permite pasar parámetros al constructor de ViewModel directamente.
- * Esta fábrica recibe todas las dependencias posibles (opcionales) y construye
- * el ViewModel correcto según el tipo solicitado.
+ * FIX: DashboardViewModel, PrintViewModel and ScanViewModel extend AndroidViewModel
+ * so they receive (application: Application) as their first constructor argument.
+ * NotificationsViewModel only needs the database.
  *
- * Uso:
- *   val viewModel: DashboardViewModel by viewModels {
- *       ViewModelFactory(
- *           database = AppDatabase.getInstance(requireContext()),
- *           discovery = PrinterDiscovery(requireContext()),
- *           ...
- *       )
- *   }
+ * The factory accepts an Application so it can construct any of these.
  */
 class ViewModelFactory(
+    private val application: Application,
     private val database: AppDatabase? = null,
     private val discovery: PrinterDiscovery? = null,
     private val ippClient: IppClient? = null,
@@ -41,50 +36,25 @@ class ViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
-            // ── DashboardViewModel ──────────────────────────────────────────────
+            // DashboardViewModel(application) — all deps come from within the VM
             modelClass.isAssignableFrom(DashboardViewModel::class.java) -> {
-                requireNotNull(database)     { "Database requerida para DashboardViewModel" }
-                requireNotNull(discovery)    { "PrinterDiscovery requerida para DashboardViewModel" }
-                requireNotNull(snmpClient)   { "SnmpClient requerido para DashboardViewModel" }
-                requireNotNull(ippClient)    { "IppClient requerido para DashboardViewModel" }
-                requireNotNull(notificationManager) { "NotificationManager requerido" }
-                DashboardViewModel(
-                    database            = database,
-                    printerDiscovery    = discovery,
-                    ippClient           = ippClient,
-                    snmpClient          = snmpClient,
-                    notificationManager = notificationManager
-                ) as T
+                DashboardViewModel(application) as T
             }
 
-            // ── PrintViewModel ──────────────────────────────────────────────────
+            // PrintViewModel(application) — deps resolved inside the VM
             modelClass.isAssignableFrom(PrintViewModel::class.java) -> {
-                requireNotNull(database)          { "Database requerida para PrintViewModel" }
-                requireNotNull(ippClient)         { "IppClient requerido para PrintViewModel" }
-                requireNotNull(notificationManager) { "NotificationManager requerido" }
-                PrintViewModel(
-                    database            = database,
-                    ippClient           = ippClient,
-                    notificationManager = notificationManager
-                ) as T
+                PrintViewModel(application) as T
             }
 
-            // ── ScanViewModel ───────────────────────────────────────────────────
+            // ScanViewModel(application) — deps resolved inside the VM
             modelClass.isAssignableFrom(ScanViewModel::class.java) -> {
-                requireNotNull(database)          { "Database requerida para ScanViewModel" }
-                requireNotNull(esclClient)        { "EsclClient requerido para ScanViewModel" }
-                requireNotNull(notificationManager) { "NotificationManager requerido" }
-                ScanViewModel(
-                    database            = database,
-                    esclClient          = esclClient,
-                    notificationManager = notificationManager
-                ) as T
+                ScanViewModel(application) as T
             }
 
-            // ── NotificationsViewModel ──────────────────────────────────────────
+            // NotificationsViewModel only needs the database
             modelClass.isAssignableFrom(NotificationsViewModel::class.java) -> {
-                requireNotNull(database) { "Database requerida para NotificationsViewModel" }
-                NotificationsViewModel(database) as T
+                val db = database ?: AppDatabase.getInstance(application)
+                NotificationsViewModel(db) as T
             }
 
             else -> throw IllegalArgumentException("ViewModel desconocido: ${modelClass.name}")

@@ -2,8 +2,8 @@ package com.example.epsonprintapp
 
 import android.os.Bundle
 import android.view.View
-import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.Toolbar
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavController
 import androidx.navigation.fragment.NavHostFragment
@@ -15,18 +15,6 @@ import com.example.epsonprintapp.database.AppDatabase
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import kotlinx.coroutines.launch
 
-/**
- * MainActivity — Actividad principal de la aplicación.
- *
- * Arquitectura de navegación:
- * - Navigation Component con un NavHostFragment como contenedor
- * - BottomNavigationView para las tres secciones principales:
- *   Dashboard → Imprimir → Escanear
- * - Las Notificaciones se acceden desde el Dashboard (botón dedicado)
- *
- * El badge de notificaciones no leídas se actualiza en tiempo real
- * observando el Flow de Room.
- */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var navController: NavController
@@ -36,12 +24,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // ── Configurar Navigation Component ────────────────────────────────────
+        // FIX: register the Toolbar as the ActionBar BEFORE calling
+        // setupActionBarWithNavController, otherwise it throws
+        // "does not have an ActionBar set via setSupportActionBar()"
+        val toolbar = findViewById<Toolbar>(R.id.toolbar)
+        setSupportActionBar(toolbar)
+
+        // ── Navigation Component ────────────────────────────────────────────
         val navHostFragment = supportFragmentManager
             .findFragmentById(R.id.nav_host_fragment) as NavHostFragment
         navController = navHostFragment.navController
 
-        // Top-level destinations: no mostrar botón "atrás" en estos fragments
         appBarConfiguration = AppBarConfiguration(
             setOf(
                 R.id.dashboardFragment,
@@ -50,29 +43,28 @@ class MainActivity : AppCompatActivity() {
             )
         )
 
-        // ── ActionBar con Navigation ────────────────────────────────────────────
         setupActionBarWithNavController(navController, appBarConfiguration)
 
-        // ── BottomNavigationView ────────────────────────────────────────────────
+        // ── BottomNavigationView ────────────────────────────────────────────
         val bottomNav = findViewById<BottomNavigationView>(R.id.bottomNavigationView)
         bottomNav.setupWithNavController(navController)
 
-        // ── Badge de notificaciones no leídas ──────────────────────────────────
+        // ── Badge de notificaciones no leídas ──────────────────────────────
         observeUnreadNotifications(bottomNav)
 
-        // ── Ocultar BottomNav en pantallas secundarias ──────────────────────────
+        // ── Ocultar BottomNav y Toolbar en pantallas secundarias ────────────
         navController.addOnDestinationChangedListener { _, destination, _ ->
             when (destination.id) {
-                R.id.notificationsFragment -> bottomNav.visibility = View.GONE
-                else                       -> bottomNav.visibility = View.VISIBLE
+                R.id.notificationsFragment -> {
+                    bottomNav.visibility = View.GONE
+                }
+                else -> {
+                    bottomNav.visibility = View.VISIBLE
+                }
             }
         }
     }
 
-    /**
-     * Observa el conteo de notificaciones no leídas y actualiza el badge
-     * del BottomNavigationView en tiempo real.
-     */
     private fun observeUnreadNotifications(bottomNav: BottomNavigationView) {
         lifecycleScope.launch {
             AppDatabase.getInstance(this@MainActivity)
@@ -90,7 +82,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Manejar botón "atrás" de la ActionBar ───────────────────────────────────
     override fun onSupportNavigateUp(): Boolean {
         return navController.navigateUp(appBarConfiguration) || super.onSupportNavigateUp()
     }

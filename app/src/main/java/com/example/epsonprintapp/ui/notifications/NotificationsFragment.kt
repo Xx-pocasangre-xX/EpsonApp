@@ -14,31 +14,28 @@ import com.example.epsonprintapp.ui.ViewModelFactory
 import java.text.SimpleDateFormat
 import java.util.*
 
-/**
- * NotificationsFragment — Muestra el historial de notificaciones persistentes.
- *
- * Características:
- * - RecyclerView con todas las notificaciones (Room → LiveData → Adapter)
- * - Swipe-to-delete en cada ítem
- * - Botón "Limpiar todo" en el menú de opciones
- * - Badge de no leídas se actualiza en tiempo real
- * - Al abrir la pantalla se marcan todas como leídas
- */
 class NotificationsFragment : Fragment() {
 
     private val viewModel: NotificationsViewModel by viewModels {
-        ViewModelFactory(database = AppDatabase.getInstance(requireContext()))
+        ViewModelFactory(
+            application = requireActivity().application,
+            database    = AppDatabase.getInstance(requireContext())
+        )
     }
 
-    private lateinit var recyclerView: RecyclerView
-    private lateinit var tvEmpty: TextView
-    private lateinit var tvUnreadCount: TextView
+    private lateinit var recyclerView:    RecyclerView
+    private lateinit var tvEmpty:         TextView
+    private lateinit var tvUnreadCount:   TextView
+
+    // FIX: qualify the ListAdapter type explicitly to avoid ambiguity with
+    //      androidx.recyclerview.widget.ListAdapter vs android.widget.ListAdapter
     private val adapter = NotificationAdapter(
         onDelete = { notification -> viewModel.deleteNotification(notification.id) }
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        @Suppress("DEPRECATION")
         setHasOptionsMenu(true)
     }
 
@@ -50,11 +47,10 @@ class NotificationsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        recyclerView   = view.findViewById(R.id.recyclerNotifications)
-        tvEmpty        = view.findViewById(R.id.tvEmpty)
-        tvUnreadCount  = view.findViewById(R.id.tvUnreadCount)
+        recyclerView  = view.findViewById(R.id.recyclerNotifications)
+        tvEmpty       = view.findViewById(R.id.tvEmpty)
+        tvUnreadCount = view.findViewById(R.id.tvUnreadCount)
 
-        // Configurar RecyclerView
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = adapter
 
@@ -72,11 +68,11 @@ class NotificationsFragment : Fragment() {
         }
         ItemTouchHelper(swipeCallback).attachToRecyclerView(recyclerView)
 
-        // Observar datos
+        // Observe data
         viewModel.notifications.observe(viewLifecycleOwner) { list ->
             adapter.submitList(list)
-            tvEmpty.visibility       = if (list.isEmpty()) View.VISIBLE else View.GONE
-            recyclerView.visibility  = if (list.isEmpty()) View.GONE   else View.VISIBLE
+            tvEmpty.visibility      = if (list.isEmpty()) View.VISIBLE else View.GONE
+            recyclerView.visibility = if (list.isEmpty()) View.GONE   else View.VISIBLE
         }
 
         viewModel.unreadCount.observe(viewLifecycleOwner) { count ->
@@ -84,6 +80,7 @@ class NotificationsFragment : Fragment() {
             tvUnreadCount.visibility = View.VISIBLE
         }
 
+        // FIX: ViewModel exposes statusMessage LiveData
         viewModel.statusMessage.observe(viewLifecycleOwner) { msg ->
             msg?.let {
                 Toast.makeText(requireContext(), it, Toast.LENGTH_SHORT).show()
@@ -91,11 +88,9 @@ class NotificationsFragment : Fragment() {
             }
         }
 
-        // Al abrir esta pantalla → marcar todas como leídas
         viewModel.markAllAsRead()
     }
 
-    // ── Menú opciones ────────────────────────────────────────────────────────────
     @Deprecated("Deprecated in Java")
     override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
         inflater.inflate(R.menu.menu_notifications, menu)
@@ -118,17 +113,13 @@ class NotificationsFragment : Fragment() {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// RecyclerView Adapter
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Adapter ────────────────────────────────────────────────────────────────────
 
-/**
- * Adapter para la lista de notificaciones.
- * Usa ListAdapter + DiffUtil para actualizaciones eficientes.
- */
+// FIX: use fully-qualified RecyclerView.ListAdapter to remove ambiguity
 class NotificationAdapter(
     private val onDelete: (NotificationEntity) -> Unit
-) : ListAdapter<NotificationEntity, NotificationAdapter.ViewHolder>(DiffCallback()) {
+) : androidx.recyclerview.widget.ListAdapter<NotificationEntity,
+        NotificationAdapter.ViewHolder>(DiffCallback()) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val view = LayoutInflater.from(parent.context)
@@ -141,21 +132,18 @@ class NotificationAdapter(
     }
 
     inner class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-        private val tvIcon:           TextView = itemView.findViewById(R.id.tvNotifIcon)
-        private val tvTitle:          TextView = itemView.findViewById(R.id.tvNotifTitle)
-        private val tvMessage:        TextView = itemView.findViewById(R.id.tvNotifMessage)
-        private val tvRecommendation: TextView = itemView.findViewById(R.id.tvNotifRecommendation)
-        private val tvDate:           TextView = itemView.findViewById(R.id.tvNotifDate)
-        private val viewUnread:       View     = itemView.findViewById(R.id.viewUnreadDot)
+        private val tvIcon:           TextView    = itemView.findViewById(R.id.tvNotifIcon)
+        private val tvTitle:          TextView    = itemView.findViewById(R.id.tvNotifTitle)
+        private val tvMessage:        TextView    = itemView.findViewById(R.id.tvNotifMessage)
+        private val tvRecommendation: TextView    = itemView.findViewById(R.id.tvNotifRecommendation)
+        private val tvDate:           TextView    = itemView.findViewById(R.id.tvNotifDate)
+        private val viewUnread:       View        = itemView.findViewById(R.id.viewUnreadDot)
 
         fun bind(notification: NotificationEntity) {
-            // Icono según tipo (emoji como texto)
-            tvIcon.text = notification.iconName
-
-            tvTitle.text   = notification.title
+            tvIcon.text   = notification.iconName
+            tvTitle.text  = notification.title
             tvMessage.text = notification.message
 
-            // Mostrar recomendación solo si existe
             if (notification.recommendation.isNullOrBlank()) {
                 tvRecommendation.visibility = View.GONE
             } else {
@@ -163,22 +151,18 @@ class NotificationAdapter(
                 tvRecommendation.text       = "💡 ${notification.recommendation}"
             }
 
-            // Formatear fecha
             val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
             tvDate.text = sdf.format(notification.createdAt)
 
-            // Punto de no leído
             viewUnread.visibility = if (notification.isRead) View.GONE else View.VISIBLE
 
-            // Color de fondo según severidad
             val bgColor = when (notification.severity) {
-                "ERROR"   -> 0xFFFFEBEE.toInt() // Rojo claro
-                "WARNING" -> 0xFFFFF8E1.toInt() // Amarillo claro
-                else      -> 0xFFF1F8E9.toInt() // Verde claro (éxito/info)
+                "ERROR"   -> 0xFFFFEBEE.toInt()
+                "WARNING" -> 0xFFFFF8E1.toInt()
+                else      -> 0xFFF1F8E9.toInt()
             }
             itemView.setBackgroundColor(bgColor)
 
-            // Botón eliminar
             itemView.findViewById<ImageButton>(R.id.btnDeleteNotif).setOnClickListener {
                 onDelete(notification)
             }
@@ -186,9 +170,7 @@ class NotificationAdapter(
     }
 
     class DiffCallback : DiffUtil.ItemCallback<NotificationEntity>() {
-        override fun areItemsTheSame(old: NotificationEntity, new: NotificationEntity) =
-            old.id == new.id
-        override fun areContentsTheSame(old: NotificationEntity, new: NotificationEntity) =
-            old == new
+        override fun areItemsTheSame(old: NotificationEntity, new: NotificationEntity) = old.id == new.id
+        override fun areContentsTheSame(old: NotificationEntity, new: NotificationEntity) = old == new
     }
 }
