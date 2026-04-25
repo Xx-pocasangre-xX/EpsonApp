@@ -13,18 +13,17 @@ import java.util.concurrent.TimeUnit
 /**
  * EsclClient — Protocolo eSCL (AirPrint Scan)
  *
- * FIX SCAN 0 PÁGINAS:
- * ===================
- * El scanner HP responde con HTTP 200 y los bytes de la imagen, pero:
- * 1. El Content-Type puede ser "image/jpeg" o "application/octet-stream"
- * 2. El download puede retornar 200 inmediatamente (HP es rápida) o 503 (Epson tarda)
- * 3. BitmapFactory puede fallar si el array de bytes tiene corrupción parcial
+ * FLUJO ESCL CORRECTO:
+ * ====================
+ * 1. POST  {base}/ScanJobs          → 201 Created + Location: {base}/ScanJobs/{uuid}
+ * 2. GET   {jobUri}/NextDocument    → 200 OK + bytes imagen  (o 503 mientras procesa)
+ * 3. GET   {jobUri}/NextDocument    → 404 o 409 cuando no hay más páginas
  *
- * Fixes aplicados:
- * - Log del Content-Type real recibido
- * - Retornar los bytes RAW junto con el content-type real
- * - Reintentar la descarga si los bytes son < 1000 (imagen incompleta)
- * - NO asumir que la imagen es siempre JPEG — usar el content-type real
+ * PROBLEMAS COMUNES:
+ * - La impresora devuelve Location como URL completa o path relativo según el modelo
+ * - Content-Type puede ser "image/jpeg", "application/octet-stream" o incluso "multipart/x-mixed-replace"
+ * - Epson a veces tarda varios segundos devolviendo 503 antes del 200
+ * - HP a veces devuelve 200 inmediatamente con los bytes completos
  */
 class EsclClient {
 
@@ -33,11 +32,19 @@ class EsclClient {
         private const val NS_ESCL = "http://schemas.hp.com/imaging/escl/2011/05/03"
         private const val NS_PWG  = "http://www.pwg.org/schemas/2010/12/sm"
         private const val SCAN_TIMEOUT_S    = 120L
-        private const val MAX_POLL_ATTEMPTS = 20
+        private const val MAX_POLL_ATTEMPTS = 30
         private const val POLL_INTERVAL_MS  = 2_000L
     }
 
     private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(SCAN_TIMEOUT_S, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .followRedirects(false)   // Manejar redirects manualmente para capturar Location
+        .build()
+
+    // Cliente separado para descarga (sigue redirects, timeout más largo)
+    private val downloadClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(SCAN_TIMEOUT_S, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -52,14 +59,16 @@ class EsclClient {
             val req  = Request.Builder().url(url).get()
                 .addHeader("Accept", "text/xml, application/xml").build()
             val resp = httpClient.newCall(req).execute()
-            if (!resp.isSuccessful) { Log.e(TAG,"Cap error: ${resp.code}"); return null }
+            if (!resp.isSuccessful) { Log.e(TAG, "Cap error: ${resp.code}"); return null }
             parseCapabilitiesXml(resp.body?.string() ?: return null)
-        } catch (e: Exception) { Log.e(TAG,"getScannerCapabilities: ${e.message}"); null }
+        } catch (e: Exception) { Log.e(TAG, "getScannerCapabilities: ${e.message}"); null }
     }
 
     suspend fun getScannerStatus(baseUrl: String): ScannerState {
         return try {
-            val resp = httpClient.newCall(Request.Builder().url("$baseUrl/ScannerStatus").get().build()).execute()
+            val resp = downloadClient.newCall(
+                Request.Builder().url("$baseUrl/ScannerStatus").get().build()
+            ).execute()
             if (!resp.isSuccessful) return ScannerState.UNKNOWN
             parseScannerState(resp.body?.string() ?: return ScannerState.UNKNOWN)
         } catch (e: Exception) { ScannerState.UNKNOWN }
@@ -69,38 +78,33 @@ class EsclClient {
 
     suspend fun scan(baseUrl: String, options: ScanOptions): ScanResult {
         return try {
-            Log.d(TAG, "Iniciando escaneo con opciones: $options")
+            Log.d(TAG, "=== Iniciando escaneo === baseUrl=$baseUrl")
 
+            // Paso 1: Crear el trabajo de escaneo
             val jobUri = createScanJob(baseUrl, options)
-                ?: return ScanResult.Error("No se pudo crear el trabajo de escaneo")
+                ?: return ScanResult.Error("No se pudo crear el trabajo de escaneo. Verifica que el escáner esté listo.")
 
-            Log.d(TAG, "Trabajo de escaneo creado: $jobUri")
+            Log.d(TAG, "Job URI recibido: $jobUri")
 
-            // FIX: downloadScanDocument ahora retorna Pair<ByteArray, String> (bytes + contentType real)
-            val (documentBytes, realMimeType) = downloadScanDocument(baseUrl, jobUri)
-                ?: return ScanResult.Error("Error al descargar el documento escaneado")
+            // Paso 2: Descargar el documento
+            val nextDocUrl = buildNextDocumentUrl(baseUrl, jobUri)
+            Log.d(TAG, "URL de descarga: $nextDocUrl")
 
-            if (documentBytes.size < 100) {
-                Log.e(TAG, "Imagen descargada muy pequeña: ${documentBytes.size} bytes — posiblemente corrupta")
-                return ScanResult.Error("La imagen escaneada está vacía o corrupta")
+            val (documentBytes, realMimeType) = pollForDocument(nextDocUrl)
+                ?: return ScanResult.Error("Tiempo de espera agotado o error al descargar el escaneo.")
+
+            Log.d(TAG, "Descarga OK: ${documentBytes.size} bytes | mime: $realMimeType")
+
+            if (documentBytes.size < 500) {
+                return ScanResult.Error("Imagen recibida demasiado pequeña (${documentBytes.size} bytes). Reintenta.")
             }
 
-            Log.d(TAG, "Documento descargado: ${documentBytes.size} bytes | ContentType real: $realMimeType")
-
-            // Usar el mime-type real del response, no el solicitado
-            val finalMime = when {
-                realMimeType.contains("jpeg") || realMimeType.contains("jpg") -> "image/jpeg"
-                realMimeType.contains("png")  -> "image/png"
-                realMimeType.contains("pdf")  -> "application/pdf"
-                options.format.mimeType.isNotEmpty() -> options.format.mimeType
-                else -> "image/jpeg"
-            }
-
+            val finalMime = normalizeMimeType(realMimeType, options.format.mimeType)
             ScanResult.Success(data = documentBytes, mimeType = finalMime, resolution = options.resolution)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error en escaneo: ${e.message}", e)
-            ScanResult.Error("Error inesperado: ${e.message}")
+            Log.e(TAG, "Error inesperado en scan: ${e.message}", e)
+            ScanResult.Error("Error: ${e.message}")
         }
     }
 
@@ -108,108 +112,188 @@ class EsclClient {
 
     private suspend fun createScanJob(baseUrl: String, options: ScanOptions): String? {
         val xml = buildScanSettingsXml(options)
-        Log.v(TAG, "Enviando ScanSettings XML:\n$xml")
+        Log.d(TAG, "POST a $baseUrl/ScanJobs")
+        Log.v(TAG, "XML:\n$xml")
 
-        val noRedirectClient = httpClient.newBuilder().followRedirects(false).build()
-        val req = Request.Builder()
-            .url("$baseUrl/ScanJobs")
-            .post(xml.toRequestBody("text/xml; charset=utf-8".toMediaType()))
-            .addHeader("Content-Type", "text/xml; charset=utf-8")
-            .build()
+        return try {
+            val req = Request.Builder()
+                .url("$baseUrl/ScanJobs")
+                .post(xml.toRequestBody("text/xml; charset=utf-8".toMediaType()))
+                .addHeader("Content-Type", "text/xml; charset=utf-8")
+                .addHeader("Accept", "*/*")
+                .build()
 
-        val resp = noRedirectClient.newCall(req).execute()
-        Log.d(TAG, "Respuesta a ScanJobs POST: ${resp.code}")
+            val resp = httpClient.newCall(req).execute()
+            Log.d(TAG, "POST ScanJobs → HTTP ${resp.code}")
 
-        return when (resp.code) {
-            201  -> { val loc = resp.header("Location"); Log.d(TAG, "Job Location: $loc"); loc }
-            503  -> { Log.e(TAG, "Escáner ocupado (503)"); null }
-            else -> { Log.e(TAG, "Error al crear trabajo: ${resp.code}"); null }
+            when (resp.code) {
+                201 -> {
+                    val location = resp.header("Location")
+                    Log.d(TAG, "Location header: $location")
+                    location
+                }
+                // Algunos Epson responden 200 en vez de 201
+                200 -> {
+                    val location = resp.header("Location")
+                        ?: resp.header("location")
+                    Log.d(TAG, "HTTP 200 con Location: $location")
+                    location
+                }
+                503 -> {
+                    Log.e(TAG, "Escáner ocupado (503)")
+                    null
+                }
+                else -> {
+                    val body = try { resp.body?.string() } catch (e: Exception) { "" }
+                    Log.e(TAG, "Error creando job: HTTP ${resp.code} | body: $body")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Excepción en createScanJob: ${e.message}")
+            null
         }
     }
 
-    // ── DOWNLOAD SCAN DOCUMENT ────────────────────────────────────────────────
+    // ── POLL FOR DOCUMENT ─────────────────────────────────────────────────────
 
     /**
-     * FIX: Retorna Pair<ByteArray, String> — bytes de la imagen + content-type real.
-     * Antes se asumía que siempre era JPEG, pero la HP puede devolver otro tipo.
-     * También se agregan logs del content-type recibido para diagnóstico.
+     * Hace polling hasta obtener los bytes del documento escaneado.
+     * Devuelve Pair<ByteArray, String> (bytes, contentType) o null si falla.
      */
-    private suspend fun downloadScanDocument(baseUrl: String, jobUri: String): Pair<ByteArray, String>? {
-        // Construir la URL de descarga correctamente
-        val documentUrl = buildDownloadUrl(baseUrl, jobUri)
-        Log.d(TAG, "Descargando documento desde: $documentUrl")
-
+    private suspend fun pollForDocument(nextDocUrl: String): Pair<ByteArray, String>? {
         for (attempt in 1..MAX_POLL_ATTEMPTS) {
-            Log.d(TAG, "Intento $attempt/$MAX_POLL_ATTEMPTS de descarga")
+            Log.d(TAG, "Intento $attempt/$MAX_POLL_ATTEMPTS → GET $nextDocUrl")
 
-            val req  = Request.Builder().url(documentUrl).get().build()
-            val resp = httpClient.newCall(req).execute()
+            try {
+                val req  = Request.Builder()
+                    .url(nextDocUrl)
+                    .get()
+                    .addHeader("Accept", "image/jpeg, image/png, application/pdf, */*")
+                    .build()
 
-            Log.d(TAG, "Respuesta descarga: HTTP ${resp.code} | Content-Type: ${resp.header("Content-Type")} | Content-Length: ${resp.header("Content-Length")}")
+                val resp = downloadClient.newCall(req).execute()
+                val code = resp.code
+                val contentType = resp.header("Content-Type") ?: "application/octet-stream"
+                val contentLength = resp.header("Content-Length")
 
-            when (resp.code) {
-                200 -> {
-                    val contentType = resp.header("Content-Type") ?: "image/jpeg"
-                    val bytes = resp.body?.bytes()
-                    if (bytes == null || bytes.isEmpty()) {
-                        Log.e(TAG, "Cuerpo vacío en intento $attempt")
-                        kotlinx.coroutines.delay(POLL_INTERVAL_MS)
-                        continue
+                Log.d(TAG, "HTTP $code | Content-Type: $contentType | Content-Length: $contentLength")
+
+                when (code) {
+                    200 -> {
+                        val bytes = resp.body?.bytes()
+                        if (bytes == null || bytes.isEmpty()) {
+                            Log.w(TAG, "Cuerpo vacío en intento $attempt, reintentando...")
+                            kotlinx.coroutines.delay(POLL_INTERVAL_MS)
+                            continue
+                        }
+                        Log.d(TAG, "✅ Documento recibido: ${bytes.size} bytes")
+                        // Log de los primeros bytes para diagnóstico
+                        Log.d(TAG, "Primeros bytes: ${bytes.take(16).joinToString(" ") { "%02X".format(it) }}")
+                        return Pair(bytes, contentType)
                     }
-                    Log.d(TAG, "✅ Documento descargado en intento $attempt: ${bytes.size} bytes | tipo: $contentType")
-                    return Pair(bytes, contentType)
-                }
-                503 -> {
-                    Log.d(TAG, "Escáner procesando... esperando ${POLL_INTERVAL_MS}ms")
-                    kotlinx.coroutines.delay(POLL_INTERVAL_MS)
-                }
-                404 -> { Log.e(TAG, "Trabajo no encontrado (404)"); return null }
-                409 -> { Log.d(TAG, "No hay más páginas (409)"); return null }
-                else -> {
-                    Log.e(TAG, "Error inesperado: ${resp.code}")
-                    if (attempt < 3) {
-                        kotlinx.coroutines.delay(1000)
-                    } else {
+                    202 -> {
+                        // Algunos escáneres devuelven 202 Accepted mientras procesan
+                        Log.d(TAG, "202 Accepted, esperando...")
+                        kotlinx.coroutines.delay(POLL_INTERVAL_MS)
+                    }
+                    503 -> {
+                        Log.d(TAG, "503 - Escáner procesando, esperando ${POLL_INTERVAL_MS}ms...")
+                        kotlinx.coroutines.delay(POLL_INTERVAL_MS)
+                    }
+                    404 -> {
+                        Log.e(TAG, "404 - Trabajo no encontrado o expirado")
                         return null
                     }
+                    409 -> {
+                        Log.d(TAG, "409 - No hay más páginas")
+                        return null
+                    }
+                    else -> {
+                        Log.e(TAG, "HTTP $code inesperado en intento $attempt")
+                        if (attempt >= 3) return null
+                        kotlinx.coroutines.delay(1000)
+                    }
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Excepción en intento $attempt: ${e.message}")
+                if (attempt >= 3) return null
+                kotlinx.coroutines.delay(1000)
             }
         }
-        Log.e(TAG, "Timeout: sin respuesta después de $MAX_POLL_ATTEMPTS intentos")
+
+        Log.e(TAG, "Timeout: $MAX_POLL_ATTEMPTS intentos sin éxito")
         return null
     }
 
+    // ── URL BUILDING ──────────────────────────────────────────────────────────
+
     /**
-     * Construye la URL de descarga correctamente.
-     * HP devuelve Location como URL completa: http://192.168.0.2:80/eSCL/ScanJobs/uuid
-     * Epson puede devolver path relativo: /eSCL/ScanJobs/123
+     * Construye la URL correcta para NextDocument.
+     *
+     * Casos posibles del Location header:
+     * - URL completa:  "http://192.168.1.5:80/eSCL/ScanJobs/abc123"
+     * - Path absoluto: "/eSCL/ScanJobs/abc123"
+     * - Path relativo: "ScanJobs/abc123"
      */
-    private fun buildDownloadUrl(baseUrl: String, jobUri: String): String {
-        return if (jobUri.startsWith("http://") || jobUri.startsWith("https://")) {
-            // URL completa de HP — agregar /NextDocument
-            "$jobUri/NextDocument"
-        } else {
-            // Path relativo — construir desde la base
-            val host = baseUrl.removePrefix("http://").removePrefix("https://").substringBefore("/")
-            "http://$host$jobUri/NextDocument"
+    private fun buildNextDocumentUrl(baseUrl: String, jobUri: String): String {
+        val cleanBase = baseUrl.trimEnd('/')
+
+        return when {
+            // URL completa — usar directamente + /NextDocument
+            jobUri.startsWith("http://") || jobUri.startsWith("https://") -> {
+                "${jobUri.trimEnd('/')}/NextDocument"
+            }
+            // Path absoluto (empieza con /)
+            jobUri.startsWith("/") -> {
+                // Extraer host del baseUrl
+                val hostPart = cleanBase.removePrefix("http://").removePrefix("https://")
+                    .substringBefore("/")
+                val scheme = if (cleanBase.startsWith("https")) "https" else "http"
+                "$scheme://$hostPart${jobUri.trimEnd('/')}/NextDocument"
+            }
+            // Path relativo
+            else -> {
+                "$cleanBase/$jobUri/NextDocument"
+            }
+        }
+    }
+
+    private fun normalizeMimeType(received: String, requested: String): String {
+        return when {
+            received.contains("jpeg") || received.contains("jpg") -> "image/jpeg"
+            received.contains("png")  -> "image/png"
+            received.contains("pdf")  -> "application/pdf"
+            // Si el Content-Type recibido no es útil, usar el solicitado
+            received.contains("octet-stream") || received.contains("*/*") -> {
+                when {
+                    requested.contains("jpeg") -> "image/jpeg"
+                    requested.contains("png")  -> "image/png"
+                    requested.contains("pdf")  -> "application/pdf"
+                    else -> "image/jpeg"
+                }
+            }
+            else -> requested.ifEmpty { "image/jpeg" }
         }
     }
 
     // ── XML BUILDERS ──────────────────────────────────────────────────────────
 
     private fun buildScanSettingsXml(options: ScanOptions): String {
+        // Dimensiones en 1/300 de pulgada
         val (width, height) = when (options.paperSize) {
             ScanPaperSize.A4     -> Pair(2480, 3508)
             ScanPaperSize.LETTER -> Pair(2550, 3300)
             ScanPaperSize.AUTO   -> Pair(2480, 3508)
         }
+        // Escalar dimensiones según resolución
         val scale        = options.resolution / 300.0
         val scaledWidth  = (width  * scale).toInt()
         val scaledHeight = (height * scale).toInt()
 
-        val colorMode   = when (options.colorMode) {
-            ScanColorMode.COLOR      -> "RGB24"
-            ScanColorMode.GRAYSCALE  -> "Grayscale8"
+        val colorMode = when (options.colorMode) {
+            ScanColorMode.COLOR       -> "RGB24"
+            ScanColorMode.GRAYSCALE   -> "Grayscale8"
             ScanColorMode.BLACK_WHITE -> "BlackAndWhite1"
         }
         val inputSource = when (options.source) {
@@ -256,9 +340,10 @@ class EsclClient {
                     XmlPullParser.TEXT -> {
                         val t = parser.text?.trim() ?: ""
                         when (currentTag) {
-                            "XResolution","YResolution" -> t.toIntOrNull()?.let { if(!resolutions.contains(it)) resolutions.add(it) }
+                            "XResolution", "YResolution" ->
+                                t.toIntOrNull()?.let { if (!resolutions.contains(it)) resolutions.add(it) }
                             "ColorMode"   -> if (!colorModes.contains(t)) colorModes.add(t)
-                            "InputSource" -> if (!sources.contains(t))     sources.add(t)
+                            "InputSource" -> if (!sources.contains(t))    sources.add(t)
                             "MaxWidth"    -> maxWidth  = t.toIntOrNull() ?: maxWidth
                             "MaxHeight"   -> maxHeight = t.toIntOrNull() ?: maxHeight
                             "Version"     -> version   = t
@@ -278,13 +363,9 @@ class EsclClient {
             while (et != XmlPullParser.END_DOCUMENT) {
                 when (et) {
                     XmlPullParser.START_TAG -> currentTag = parser.name ?: ""
-                    XmlPullParser.TEXT -> if (currentTag=="State") state = parser.text?.trim() ?: "Idle"
+                    XmlPullParser.TEXT -> if (currentTag == "State") state = parser.text?.trim() ?: "Idle"
                 }
                 et = parser.next()
-            }
-            when (state.lowercase()) {
-                "idle"->"ScannerState.IDLE"; "processing"->"ScannerState.PROCESSING"
-                else -> "ScannerState.UNKNOWN"
             }
             when (state.lowercase()) {
                 "idle"       -> ScannerState.IDLE
@@ -313,14 +394,16 @@ enum class ScanIntent(val value: String) {
     DOCUMENT("Document"), TEXT_AND_GRAPHIC("TextAndGraphic"), PHOTO("Photo"), PREVIEW("Preview")
 }
 enum class ScanFormat(val mimeType: String, val extension: String) {
-    JPEG("image/jpeg","jpg"), PNG("image/png","png"), PDF("application/pdf","pdf")
+    JPEG("image/jpeg", "jpg"), PNG("image/png", "png"), PDF("application/pdf", "pdf")
 }
 enum class ScannerState { IDLE, PROCESSING, TESTING, STOPPED, UNKNOWN }
 data class ScannerCapabilities(
-    val availableResolutions: List<Int>    = listOf(75,150,300,600),
-    val availableColorModes:  List<String> = listOf("RGB24","Grayscale8"),
+    val availableResolutions: List<Int>    = listOf(75, 150, 300, 600),
+    val availableColorModes:  List<String> = listOf("RGB24", "Grayscale8"),
     val availableSources:     List<String> = listOf("Platen"),
-    val maxWidth:  Int    = 2480, val maxHeight: Int = 3508, val version: String = "2.6"
+    val maxWidth:  Int    = 2480,
+    val maxHeight: Int    = 3508,
+    val version:   String = "2.6"
 )
 sealed class ScanResult {
     data class Success(val data: ByteArray, val mimeType: String, val resolution: Int) : ScanResult()

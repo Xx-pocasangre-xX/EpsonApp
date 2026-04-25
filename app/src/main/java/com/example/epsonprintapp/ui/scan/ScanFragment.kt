@@ -56,7 +56,6 @@ class ScanFragment : Fragment() {
         setupPagesAdapter()
         observeViewModel()
         setupClickListeners()
-        // Color por defecto resaltado
         setColorSelected(true)
     }
 
@@ -95,10 +94,12 @@ class ScanFragment : Fragment() {
 
     // ── Observe ────────────────────────────────────────────────────────────────
     private fun observeViewModel() {
+
         viewModel.isScanning.observe(viewLifecycleOwner) { scanning ->
-            progressBar.isVisible  = scanning
-            btnScan.isEnabled      = !scanning
-            btnScanMore.isEnabled  = !scanning && (viewModel.scannedPages.value?.isNotEmpty() == true)
+            progressBar.isVisible   = scanning
+            btnScan.isEnabled       = !scanning
+            val hasData = viewModel.hasScannedData.value == true
+            btnScanMore.isEnabled   = !scanning && hasData
             btnSaveImages.isEnabled = !scanning
             btnSavePdf.isEnabled    = !scanning
         }
@@ -107,7 +108,7 @@ class ScanFragment : Fragment() {
             tvStatus.text = msg ?: "Listo para escanear"
         }
 
-        // Última página → preview grande
+        // Última página → preview grande (solo si hay bitmap)
         viewModel.scannedBitmap.observe(viewLifecycleOwner) { bitmap ->
             if (bitmap != null) {
                 imagePreview.setImageBitmap(bitmap)
@@ -115,14 +116,27 @@ class ScanFragment : Fragment() {
             }
         }
 
-        // Páginas acumuladas → miniaturas + mostrar/ocultar cards
+        // Páginas con bitmap → miniaturas
         viewModel.scannedPages.observe(viewLifecycleOwner) { pages ->
             pagesAdapter.submitList(pages)
-            val count = pages.size
-            cardPages.isVisible     = count > 0
-            cardSave.isVisible      = count > 0
-            btnScanMore.isEnabled   = count > 0 && viewModel.isScanning.value == false
-            tvPageCount.text        = "📄 $count ${if (count == 1) "página escaneada" else "páginas escaneadas"}"
+        }
+
+        // hasScannedData controla visibilidad de cards de acción
+        // Se activa aunque el bitmap no se haya podido decodificar
+        viewModel.hasScannedData.observe(viewLifecycleOwner) { hasData ->
+            cardSave.isVisible    = hasData
+            cardPages.isVisible   = hasData && (viewModel.scannedPages.value?.isNotEmpty() == true)
+            btnScanMore.isEnabled = hasData && viewModel.isScanning.value == false
+        }
+
+        // Contador de páginas (incluye las sin preview)
+        viewModel.pageCount.observe(viewLifecycleOwner) { count ->
+            if (count > 0) {
+                tvPageCount.text      = "📄 $count ${if (count == 1) "página escaneada" else "páginas escaneadas"}"
+                // Mostrar card de páginas solo si hay bitmaps visibles
+                val hasBitmaps = (viewModel.scannedPages.value?.size ?: 0) > 0
+                cardPages.isVisible   = hasBitmaps
+            }
         }
 
         viewModel.saveResult.observe(viewLifecycleOwner) { result ->
@@ -134,7 +148,6 @@ class ScanFragment : Fragment() {
 
     // ── Click listeners ────────────────────────────────────────────────────────
     private fun setupClickListeners() {
-        // Selección de modo color
         btnModeColor.setOnClickListener {
             viewModel.setColorMode(true)
             setColorSelected(true)
@@ -144,30 +157,27 @@ class ScanFragment : Fragment() {
             setColorSelected(false)
         }
 
-        // Escanear (nueva sesión)
         btnScan.setOnClickListener {
             viewModel.startScan(appendToExisting = false)
         }
 
-        // Agregar otra página al lote actual
         btnScanMore.setOnClickListener {
             viewModel.scanNextPage()
         }
 
-        // Limpiar todas las páginas
         btnClearPages.setOnClickListener {
             viewModel.clearPages()
             cardPreview.isVisible = false
+            cardPages.isVisible   = false
+            cardSave.isVisible    = false
         }
 
-        // Guardar como imagen(es)
         btnSaveImages.setOnClickListener {
             viewModel.saveAsImages(requireContext())
         }
 
-        // Guardar como PDF
         btnSavePdf.setOnClickListener {
-            val pageCount = viewModel.scannedPages.value?.size ?: 0
+            val pageCount = viewModel.pageCount.value ?: 0
             val timestamp = System.currentTimeMillis()
             val fileName  = if (pageCount == 1) "scan_$timestamp.pdf"
             else "scan_${pageCount}pag_$timestamp.pdf"
@@ -176,20 +186,11 @@ class ScanFragment : Fragment() {
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
-
-    /** Resalta visualmente el modo seleccionado (Color vs B&N) */
     private fun setColorSelected(colorSelected: Boolean) {
-        // Intercambia los estilos: el activo es filled, el inactivo es outlined
-        val colorBtn  = btnModeColor  as? com.google.android.material.button.MaterialButton
-        val bwBtn     = btnModeBW     as? com.google.android.material.button.MaterialButton
-
-        if (colorSelected) {
-            colorBtn?.alpha = 1.0f
-            bwBtn?.alpha    = 0.5f
-        } else {
-            colorBtn?.alpha = 0.5f
-            bwBtn?.alpha    = 1.0f
-        }
+        val colorBtn = btnModeColor as? com.google.android.material.button.MaterialButton
+        val bwBtn    = btnModeBW    as? com.google.android.material.button.MaterialButton
+        if (colorSelected) { colorBtn?.alpha = 1.0f; bwBtn?.alpha = 0.5f }
+        else               { colorBtn?.alpha = 0.5f; bwBtn?.alpha = 1.0f }
     }
 }
 
@@ -216,7 +217,6 @@ class ScannedPagesAdapter(
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(0xFFEEEEEE.toInt())
         }
-        // Número de página encima
         val badge = TextView(parent.context).apply {
             layoutParams = android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,

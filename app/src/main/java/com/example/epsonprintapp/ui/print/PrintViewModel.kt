@@ -2,7 +2,12 @@ package com.example.epsonprintapp.ui.print
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
@@ -18,6 +23,7 @@ import com.example.epsonprintapp.printer.PrintOptions
 import com.example.epsonprintapp.printer.PrintQuality
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
 class PrintViewModel(application: Application) : AndroidViewModel(application) {
@@ -53,7 +59,6 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
     private var currentJobId: Long = -1
 
     // ── Papel detectado de la impresora ────────────────────────────────────────
-    /** Papel que tiene cargado la impresora (detectado via Get-Printer-Attrs) */
     private val _detectedPaperSize = MutableLiveData<PaperSize?>(null)
     val detectedPaperSize: LiveData<PaperSize?> = _detectedPaperSize
 
@@ -108,7 +113,7 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
                 _printProgress.postValue(15)
 
-                // 2. Consultar estado de la impresora para detectar papel y brand
+                // 2. Consultar estado de la impresora
                 val printerStatus = ippClient.getPrinterStatus(printer.ippUrl)
                 if (printerStatus == null) {
                     _errorMessage.postValue("No se puede conectar con la impresora en ${printer.ippUrl}.\nVerifica que esté encendida y en la misma red.")
@@ -116,17 +121,14 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                // Detectar tamaño de papel que tiene la impresora
                 val detectedPaper = detectPaperFromPrinterStatus(printerStatus)
                 _detectedPaperSize.postValue(detectedPaper)
-
                 _printProgress.postValue(25)
 
-                // 3. Resolver opciones: usar el papel detectado si el usuario no cambió el default
+                // 3. Resolver opciones finales
                 val userOptions = _printOptions.value ?: PrintOptions()
                 val finalOptions = if (detectedPaper != null &&
                     userOptions.paperSize == PrintOptions().paperSize) {
-                    // El usuario dejó el papel por default → usar el de la impresora
                     userOptions.copy(paperSize = detectedPaper)
                 } else {
                     userOptions
@@ -150,44 +152,15 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
                 currentJobId = database.printJobDao().insertPrintJob(printJob)
                 _printProgress.postValue(35)
 
-                // 5. Abrir stream
-                val inputStream: InputStream = context.contentResolver.openInputStream(uri) ?: run {
-                    handlePrintError(currentJobId, "No se pudo abrir el archivo")
-                    return@launch
-                }
+                // 5. Preparar y enviar según tipo de archivo
+                val isPdf = mimeType == "application/pdf"
 
-                _printProgress.postValue(50)
-
-                // 6. Convertir PNG → JPEG si es necesario (mejor compatibilidad)
-                val (finalStream, finalMimeType) = if (mimeType == "image/png") {
-                    Pair(convertPngToJpeg(inputStream), "image/jpeg")
+                if (isPdf) {
+                    // PDF: rasterizar cada página a JPEG y enviar como imagen
+                    sendPdfAsImages(context, uri, printer.ippUrl, finalOptions, fileName)
                 } else {
-                    Pair(inputStream, mimeType)
-                }
-
-                _printProgress.postValue(65)
-
-                // 7. Enviar vía IPP
-                val result = ippClient.printDocument(
-                    printerUrl     = printer.ippUrl,
-                    documentStream = finalStream,
-                    mimeType       = finalMimeType,
-                    printOptions   = finalOptions
-                )
-
-                finalStream.close()
-                _printProgress.postValue(90)
-
-                if (result != null && result.success) {
-                    database.printJobDao().markJobCompleted(currentJobId)
-                    notificationManager.notifyPrintSuccess(fileName, currentJobId)
-                    _printSuccess.postValue(true)
-                    _printProgress.postValue(100)
-                } else {
-                    val errorMsg = result?.errorMessage
-                        ?: "Error desconocido (código: 0x${result?.statusCode?.toString(16) ?: "?"})"
-                    handlePrintError(currentJobId, errorMsg)
-                    notificationManager.notifyPrintError(errorMsg, fileName, currentJobId)
+                    // Imagen: enviar directamente como JPEG
+                    sendImageFile(context, uri, mimeType, printer.ippUrl, finalOptions, fileName)
                 }
 
             } catch (e: Exception) {
@@ -198,26 +171,174 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Rasteriza el PDF página por página y envía cada una como JPEG.
+     * Las impresoras Epson/HP generalmente NO aceptan PDF vía IPP directo;
+     * sí aceptan image/jpeg sin problema.
+     */
+    private suspend fun sendPdfAsImages(
+        context: Context,
+        uri: Uri,
+        printerUrl: String,
+        options: PrintOptions,
+        fileName: String
+    ) {
+        var pfd: ParcelFileDescriptor? = null
+        var renderer: PdfRenderer? = null
+        try {
+            pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                ?: run { handlePrintError(currentJobId, "No se pudo abrir el PDF"); return }
+
+            renderer = PdfRenderer(pfd)
+            val pageCount = renderer.pageCount
+
+            if (pageCount == 0) {
+                handlePrintError(currentJobId, "El PDF no tiene páginas")
+                return
+            }
+
+            _printProgress.postValue(45)
+
+            // Calcular el ancho objetivo en píxeles según el papel seleccionado y 200 DPI
+            // (200 DPI es suficiente para impresión y no satura la red)
+            val dpi = 200
+            val (targetW, targetH) = when (options.paperSize) {
+                PaperSize.A4     -> Pair((8.27 * dpi).toInt(), (11.69 * dpi).toInt())  // 1654 x 2339
+                PaperSize.LETTER -> Pair((8.5  * dpi).toInt(), (11.0  * dpi).toInt())  // 1700 x 2200
+                PaperSize.A3     -> Pair((11.69 * dpi).toInt(),(16.54 * dpi).toInt())  // 2338 x 3308
+                PaperSize.PHOTO_4X6 -> Pair((4 * dpi).toInt(), (6 * dpi).toInt())      // 800 x 1200
+            }
+
+            var lastResult: com.example.epsonprintapp.printer.PrintJobResult? = null
+
+            for (pageIndex in 0 until pageCount) {
+                val progressStart = 45 + (pageIndex * 45 / pageCount)
+                val progressEnd   = 45 + ((pageIndex + 1) * 45 / pageCount)
+                _printProgress.postValue(progressStart)
+
+                val page = renderer.openPage(pageIndex)
+
+                // Mantener aspect ratio
+                val pageAspect = page.width.toFloat() / page.height.toFloat()
+                val targetAspect = targetW.toFloat() / targetH.toFloat()
+                val (renderW, renderH) = if (pageAspect > targetAspect) {
+                    Pair(targetW, (targetW / pageAspect).toInt())
+                } else {
+                    Pair((targetH * pageAspect).toInt(), targetH)
+                }
+
+                val bitmap = Bitmap.createBitmap(renderW, renderH, Bitmap.Config.ARGB_8888)
+                // Fondo blanco (las impresoras no entienden transparencia)
+                Canvas(bitmap).drawColor(Color.WHITE)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                page.close()
+
+                // Comprimir a JPEG
+                val jpegBytes = bitmapToJpeg(bitmap, quality = 90)
+                bitmap.recycle()
+
+                _printProgress.postValue(progressEnd)
+
+                // Enviar esta página
+                val result = ippClient.printDocument(
+                    printerUrl     = printerUrl,
+                    documentStream = jpegBytes.inputStream(),
+                    mimeType       = "image/jpeg",
+                    printOptions   = options
+                )
+
+                lastResult = result
+
+                if (result == null || !result.success) {
+                    val errorMsg = result?.errorMessage
+                        ?: "Error al enviar página ${pageIndex + 1}"
+                    handlePrintError(currentJobId, errorMsg)
+                    notificationManager.notifyPrintError(errorMsg, fileName, currentJobId)
+                    return
+                }
+            }
+
+            // Todas las páginas enviadas exitosamente
+            database.printJobDao().markJobCompleted(currentJobId)
+            notificationManager.notifyPrintSuccess(fileName, currentJobId)
+            _printSuccess.postValue(true)
+            _printProgress.postValue(100)
+
+        } catch (e: Exception) {
+            handlePrintError(currentJobId, "Error al procesar PDF: ${e.message}")
+        } finally {
+            renderer?.close()
+            pfd?.close()
+        }
+    }
+
+    /**
+     * Envía una imagen (JPEG o PNG) directamente a la impresora.
+     * PNG se convierte a JPEG para máxima compatibilidad.
+     */
+    private suspend fun sendImageFile(
+        context: Context,
+        uri: Uri,
+        mimeType: String,
+        printerUrl: String,
+        options: PrintOptions,
+        fileName: String
+    ) {
+        _printProgress.postValue(50)
+
+        val inputStream: InputStream = context.contentResolver.openInputStream(uri) ?: run {
+            handlePrintError(currentJobId, "No se pudo abrir el archivo")
+            return
+        }
+
+        val (finalStream, finalMimeType) = if (mimeType == "image/png") {
+            Pair(convertPngToJpeg(inputStream), "image/jpeg")
+        } else {
+            Pair(inputStream, mimeType)
+        }
+
+        _printProgress.postValue(65)
+
+        val result = ippClient.printDocument(
+            printerUrl     = printerUrl,
+            documentStream = finalStream,
+            mimeType       = finalMimeType,
+            printOptions   = options
+        )
+
+        finalStream.close()
+        _printProgress.postValue(90)
+
+        if (result != null && result.success) {
+            database.printJobDao().markJobCompleted(currentJobId)
+            notificationManager.notifyPrintSuccess(fileName, currentJobId)
+            _printSuccess.postValue(true)
+            _printProgress.postValue(100)
+        } else {
+            val errorMsg = result?.errorMessage
+                ?: "Error desconocido (código: 0x${result?.statusCode?.toString(16) ?: "?"})"
+            handlePrintError(currentJobId, errorMsg)
+            notificationManager.notifyPrintError(errorMsg, fileName, currentJobId)
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // UTILIDADES PRIVADAS
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Detecta el tamaño de papel disponible en la impresora según
-     * el atributo media-ready que reporta en Get-Printer-Attributes.
-     *
-     * HP Smart Tank 710 → "na_letter_8.5x11in"  → PaperSize.LETTER
-     * Epson L3560       → "iso_a4_210x297mm"     → PaperSize.A4
-     */
+    private fun bitmapToJpeg(bitmap: Bitmap, quality: Int = 90): ByteArray {
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        return out.toByteArray()
+    }
+
     private fun detectPaperFromPrinterStatus(status: com.example.epsonprintapp.printer.PrinterStatus): PaperSize? {
-        // stateReasons contiene el media-ready de la impresora codificado
-        // pero lo leemos del modelo para inferir
         val model = status.model?.lowercase() ?: return null
         return when {
             model.contains("hp") || model.contains("smart tank") ||
                     model.contains("deskjet") || model.contains("officejet") -> PaperSize.LETTER
             model.contains("epson") || model.contains("ecotank") -> PaperSize.A4
-            else -> null  // No detectado, dejar al usuario elegir
+            else -> null
         }
     }
 
@@ -243,7 +364,7 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
             "pdf"        -> "application/pdf"
             "jpg","jpeg" -> "image/jpeg"
             "png"        -> "image/png"
-            else         -> "application/pdf"  // default a PDF
+            else         -> "application/pdf"
         }
     }
 
@@ -253,9 +374,16 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun convertPngToJpeg(inputStream: InputStream): InputStream {
         val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
-        val output = java.io.ByteArrayOutputStream()
-        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, output)
+        val output = ByteArrayOutputStream()
+        // Fondo blanco antes de comprimir (PNG puede tener transparencia)
+        val bgBitmap = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+        Canvas(bgBitmap).apply {
+            drawColor(Color.WHITE)
+            drawBitmap(bitmap, 0f, 0f, null)
+        }
         bitmap.recycle()
+        bgBitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)
+        bgBitmap.recycle()
         return output.toByteArray().inputStream()
     }
 
