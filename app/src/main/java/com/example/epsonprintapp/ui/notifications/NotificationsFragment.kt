@@ -24,11 +24,10 @@ class NotificationsFragment : Fragment() {
     }
 
     private lateinit var recyclerView:    RecyclerView
-    private lateinit var tvEmpty:         TextView
+    // FIX: tvEmpty es un LinearLayout en el XML, usamos View (no TextView)
+    private lateinit var emptyLayout:     View
     private lateinit var tvUnreadCount:   TextView
 
-    // FIX: qualify the ListAdapter type explicitly to avoid ambiguity with
-    //      androidx.recyclerview.widget.ListAdapter vs android.widget.ListAdapter
     private val adapter = NotificationAdapter(
         onDelete = { notification -> viewModel.deleteNotification(notification.id) }
     )
@@ -48,7 +47,8 @@ class NotificationsFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         recyclerView  = view.findViewById(R.id.recyclerNotifications)
-        tvEmpty       = view.findViewById(R.id.tvEmpty)
+        // FIX: usar View en lugar de TextView para evitar ClassCastException
+        emptyLayout   = view.findViewById(R.id.tvEmpty)
         tvUnreadCount = view.findViewById(R.id.tvUnreadCount)
 
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
@@ -62,8 +62,11 @@ class NotificationsFragment : Fragment() {
                                 target: RecyclerView.ViewHolder) = false
 
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-                val notification = adapter.currentList[viewHolder.adapterPosition]
-                viewModel.deleteNotification(notification.id)
+                val position = viewHolder.adapterPosition
+                if (position != RecyclerView.NO_ID.toInt() && position < adapter.currentList.size) {
+                    val notification = adapter.currentList[position]
+                    viewModel.deleteNotification(notification.id)
+                }
             }
         }
         ItemTouchHelper(swipeCallback).attachToRecyclerView(recyclerView)
@@ -71,7 +74,7 @@ class NotificationsFragment : Fragment() {
         // Observe data
         viewModel.notifications.observe(viewLifecycleOwner) { list ->
             adapter.submitList(list)
-            tvEmpty.visibility      = if (list.isEmpty()) View.VISIBLE else View.GONE
+            emptyLayout.visibility  = if (list.isEmpty()) View.VISIBLE else View.GONE
             recyclerView.visibility = if (list.isEmpty()) View.GONE   else View.VISIBLE
         }
 
@@ -80,7 +83,6 @@ class NotificationsFragment : Fragment() {
             tvUnreadCount.visibility = View.VISIBLE
         }
 
-        // FIX: ViewModel exposes statusMessage LiveData
         viewModel.statusMessage.observe(viewLifecycleOwner) { msg ->
             msg?.let {
                 Toast.makeText(requireContext(), it, Toast.LENGTH_SHORT).show()
@@ -115,7 +117,6 @@ class NotificationsFragment : Fragment() {
 
 // ── Adapter ────────────────────────────────────────────────────────────────────
 
-// FIX: use fully-qualified RecyclerView.ListAdapter to remove ambiguity
 class NotificationAdapter(
     private val onDelete: (NotificationEntity) -> Unit
 ) : androidx.recyclerview.widget.ListAdapter<NotificationEntity,
@@ -140,8 +141,8 @@ class NotificationAdapter(
         private val viewUnread:       View        = itemView.findViewById(R.id.viewUnreadDot)
 
         fun bind(notification: NotificationEntity) {
-            tvIcon.text   = notification.iconName
-            tvTitle.text  = notification.title
+            tvIcon.text    = notification.iconName
+            tvTitle.text   = notification.title
             tvMessage.text = notification.message
 
             if (notification.recommendation.isNullOrBlank()) {

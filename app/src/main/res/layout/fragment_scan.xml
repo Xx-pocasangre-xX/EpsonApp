@@ -1,13 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    fragment_scan.xml
-    Pantalla de escaneo eSCL con:
-    - Opciones de escaneo (resolución, color, fuente, formato)
-    - Botón "Escanear"
-    - ImageView de previsualización
-    - Herramientas de edición (brillo, contraste)
-    - Botones de guardado (galería / PDF)
--->
 <androidx.core.widget.NestedScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -21,7 +12,7 @@
         android:orientation="vertical"
         android:padding="16dp">
 
-        <!-- ── CARD: Opciones de escaneo ──────────────────────────────── -->
+        <!-- ── CARD: Modo de escaneo (simplificado) ───────────────────── -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -38,42 +29,48 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="⚙️ Opciones de escaneo"
+                    android:text="🎨 Modo de color"
                     android:textSize="14sp"
                     android:textStyle="bold"
                     android:textColor="@color/text_primary"
                     android:layout_marginBottom="12dp"/>
 
-                <!-- Resolución -->
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="Resolución (DPI)" android:textSize="13sp"
-                    android:textColor="@color/text_secondary"/>
-                <Spinner android:id="@+id/spinnerResolution"
-                    android:layout_width="match_parent" android:layout_height="48dp"
-                    android:layout_marginBottom="12dp"/>
+                <!-- Toggle Color / B&N -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
 
-                <!-- Modo de color -->
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="Modo de color" android:textSize="13sp"
-                    android:textColor="@color/text_secondary"/>
-                <Spinner android:id="@+id/spinnerColor"
-                    android:layout_width="match_parent" android:layout_height="48dp"
-                    android:layout_marginBottom="12dp"/>
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnModeColor"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="6dp"
+                        android:text="🌈 Color"
+                        app:cornerRadius="8dp"
+                        style="@style/Widget.MaterialComponents.Button"/>
 
-                <!-- Fuente de escaneo -->
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="Fuente" android:textSize="13sp"
-                    android:textColor="@color/text_secondary"/>
-                <Spinner android:id="@+id/spinnerSource"
-                    android:layout_width="match_parent" android:layout_height="48dp"
-                    android:layout_marginBottom="12dp"/>
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnModeBW"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="6dp"
+                        android:text="⬛ Blanco/Negro"
+                        app:cornerRadius="8dp"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
 
-                <!-- Formato de salida -->
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="Formato de salida" android:textSize="13sp"
-                    android:textColor="@color/text_secondary"/>
-                <Spinner android:id="@+id/spinnerFormat"
-                    android:layout_width="match_parent" android:layout_height="48dp"/>
+                </LinearLayout>
+
+                <!-- Nota informativa -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ℹ️ Resolución 300 DPI · Papel A4 · JPEG automático"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="10dp"/>
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -96,135 +93,194 @@
             android:visibility="gone"
             android:layout_marginBottom="8dp"/>
 
-        <!-- Botón Escanear -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnScan"
+        <!-- Botones Escanear / + Agregar página -->
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:text="🔍  Escanear"
-            android:textSize="17sp"
-            android:layout_marginBottom="16dp"
-            app:cornerRadius="12dp"
-            style="@style/Widget.MaterialComponents.Button"/>
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="12dp">
 
-        <!-- ── Preview del escaneo ──────────────────────────────────────── -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnScan"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp"
+                android:text="🔍 Escanear"
+                android:textSize="16sp"
+                app:cornerRadius="12dp"
+                style="@style/Widget.MaterialComponents.Button"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnScanMore"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_weight="1"
+                android:layout_marginStart="6dp"
+                android:text="➕ Agregar"
+                android:textSize="14sp"
+                android:enabled="false"
+                app:cornerRadius="12dp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+        </LinearLayout>
+
+        <!-- ── CARD: Páginas acumuladas ──────────────────────────────── -->
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardPages"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="12dp"
+            android:visibility="gone"
             app:cardCornerRadius="12dp"
             app:cardElevation="4dp">
 
-            <ImageView
-                android:id="@+id/imagePreview"
-                android:layout_width="match_parent"
-                android:layout_height="280dp"
-                android:scaleType="fitCenter"
-                android:background="#F5F5F5"
-                android:contentDescription="Vista previa del escaneo"/>
-
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- ── CARD: Herramientas de edición (ocultas hasta que haya escaneo) -->
-        <LinearLayout
-            android:id="@+id/layoutEditTools"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:visibility="gone">
-
-            <com.google.android.material.card.MaterialCardView
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
-                app:cardCornerRadius="12dp"
-                app:cardElevation="4dp">
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <!-- Header con contador -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="8dp">
+
+                    <TextView
+                        android:id="@+id/tvPageCount"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="📄 0 páginas"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnClearPages"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🗑️ Limpiar"
+                        android:textSize="12sp"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"/>
+
+                </LinearLayout>
+
+                <!-- Miniaturas horizontales -->
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rvPages"
+                    android:layout_width="match_parent"
+                    android:layout_height="140dp"
+                    android:orientation="horizontal"
+                    app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- ── Preview de la última página ───────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardPreview"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:visibility="gone"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="8dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Vista previa — última página"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginBottom="6dp"/>
+
+                <ImageView
+                    android:id="@+id/imagePreview"
+                    android:layout_width="match_parent"
+                    android:layout_height="320dp"
+                    android:scaleType="fitCenter"
+                    android:background="#F5F5F5"
+                    android:contentDescription="Vista previa del escaneo"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- ── CARD: Guardar (visible solo cuando hay páginas) ────────── -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:visibility="gone"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="💾 Guardar escaneo"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/text_primary"
+                    android:layout_marginBottom="12dp"/>
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
+                    android:orientation="horizontal">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="✏️ Edición"
-                        android:textSize="14sp"
-                        android:textStyle="bold"
-                        android:textColor="@color/text_primary"
-                        android:layout_marginBottom="12dp"/>
-
-                    <!-- Brillo -->
-                    <TextView
-                        android:id="@+id/tvBrightnessValue"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Brillo: 100"
-                        android:textSize="13sp"
-                        android:textColor="@color/text_secondary"/>
-                    <SeekBar
-                        android:id="@+id/seekBrightness"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginBottom="12dp"/>
-
-                    <!-- Contraste -->
-                    <TextView
-                        android:id="@+id/tvContrastValue"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Contraste: 100"
-                        android:textSize="13sp"
-                        android:textColor="@color/text_secondary"/>
-                    <SeekBar
-                        android:id="@+id/seekContrast"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginBottom="12dp"/>
-
-                    <!-- Botón Recortar (UCrop) -->
+                    <!-- Guardar como imagen(es) en galería -->
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnCrop"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="✂️  Recortar"
-                        android:enabled="false"
+                        android:id="@+id/btnSaveImages"
+                        android:layout_width="0dp"
+                        android:layout_height="56dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="6dp"
+                        android:text="🖼️ Imagen"
+                        android:textSize="15sp"
+                        app:cornerRadius="10dp"
+                        style="@style/Widget.MaterialComponents.Button"/>
+
+                    <!-- Guardar como PDF (todas las páginas en uno) -->
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnSavePdf"
+                        android:layout_width="0dp"
+                        android:layout_height="56dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="6dp"
+                        android:text="📄 PDF"
+                        android:textSize="15sp"
+                        app:cornerRadius="10dp"
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
 
                 </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
 
-            <!-- Botones de guardado -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginBottom="24dp">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnSaveGallery"
-                    android:layout_width="0dp"
+                <TextView
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="6dp"
-                    android:text="🖼️ Galería"
-                    android:enabled="false"
-                    style="@style/Widget.MaterialComponents.Button"/>
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnSavePdf"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="6dp"
-                    android:text="📄 PDF"
-                    android:enabled="false"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+                    android:text="Imagen: guarda cada página en la galería\nPDF: une todas las páginas en un solo archivo"
+                    android:textSize="11sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginTop="8dp"/>
 
             </LinearLayout>
-
-        </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>

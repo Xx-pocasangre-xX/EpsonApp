@@ -1,13 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    fragment_print.xml
-    Pantalla de impresión con:
-    - Área de preview del archivo (PDF/imagen)
-    - Opciones de impresión: color, copias, doble cara, tamaño papel, calidad
-    - Botón "Seleccionar archivo" (SAF)
-    - Botón "Imprimir"
-    - Barra de progreso
--->
 <androidx.core.widget.NestedScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -25,7 +16,7 @@
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
+            android:layout_marginBottom="12dp"
             app:cardCornerRadius="12dp"
             app:cardElevation="4dp">
 
@@ -34,15 +25,15 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:gravity="center"
-                android:padding="12dp"
-                android:minHeight="200dp">
+                android:padding="12dp">
 
-                <!-- Preview de imagen/PDF -->
+                <!-- Preview de imagen/PDF — altura más generosa -->
                 <ImageView
                     android:id="@+id/imagePreview"
                     android:layout_width="match_parent"
-                    android:layout_height="200dp"
+                    android:layout_height="260dp"
                     android:scaleType="fitCenter"
+                    android:background="#F5F5F5"
                     android:visibility="gone"
                     android:contentDescription="Vista previa del archivo"/>
 
@@ -50,7 +41,7 @@
                 <LinearLayout
                     android:id="@+id/layoutNoFile"
                     android:layout_width="match_parent"
-                    android:layout_height="200dp"
+                    android:layout_height="160dp"
                     android:orientation="vertical"
                     android:gravity="center">
 
@@ -67,6 +58,14 @@
                         android:textSize="14sp"
                         android:textColor="@color/text_secondary"
                         android:layout_marginTop="8dp"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="PDF, JPEG o PNG"
+                        android:textSize="12sp"
+                        android:textColor="@color/text_secondary"
+                        android:layout_marginTop="4dp"/>
                 </LinearLayout>
 
                 <!-- Nombre del archivo seleccionado -->
@@ -76,7 +75,8 @@
                     android:layout_height="wrap_content"
                     android:text=""
                     android:textSize="13sp"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="@color/text_primary"
+                    android:textStyle="bold"
                     android:gravity="center"
                     android:layout_marginTop="8dp"
                     android:maxLines="2"
@@ -92,14 +92,14 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="📂  Seleccionar archivo (PDF / Imagen)"
-            android:layout_marginBottom="16dp"
+            android:layout_marginBottom="12dp"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
 
         <!-- ── CARD: Opciones de impresión ─────────────────────────────── -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
+            android:layout_marginBottom="12dp"
             app:cardCornerRadius="12dp"
             app:cardElevation="4dp">
 
@@ -175,7 +175,8 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:gravity="center_vertical">
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="4dp">
 
                     <TextView
                         android:layout_width="0dp"
@@ -192,7 +193,8 @@
                         android:text="1"
                         android:textSize="16sp"
                         android:textStyle="bold"
-                        android:gravity="center"/>
+                        android:gravity="center"
+                        android:textColor="@color/md_theme_light_primary"/>
                 </LinearLayout>
 
                 <SeekBar
@@ -200,30 +202,48 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:max="19"
-                    android:progress="0"
-                    android:layout_marginTop="4dp"/>
+                    android:progress="0"/>
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Mensaje de estado -->
-        <TextView
-            android:id="@+id/tvPrintStatus"
+        <!-- ── CARD: Estado del trabajo ────────────────────────────────── -->
+        <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text=""
-            android:textSize="14sp"
-            android:textColor="@color/text_secondary"
-            android:gravity="center"
-            android:layout_marginBottom="8dp"/>
+            android:layout_marginBottom="12dp"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="2dp">
 
-        <!-- Barra de progreso (visible durante impresión) -->
-        <ProgressBar
-            android:id="@+id/progressPrint"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:visibility="gone"
-            android:layout_marginBottom="12dp"/>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <!-- Mensaje de estado -->
+                <TextView
+                    android:id="@+id/tvPrintStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textSize="14sp"
+                    android:textColor="@color/text_secondary"
+                    android:gravity="center"
+                    android:layout_marginBottom="8dp"/>
+
+                <!-- Barra de progreso determinada (visible durante impresión) -->
+                <ProgressBar
+                    android:id="@+id/progressPrint"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="8dp"
+                    android:visibility="gone"
+                    android:max="100"
+                    android:progress="0"/>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
         <!-- Botón Imprimir -->
         <com.google.android.material.button.MaterialButton

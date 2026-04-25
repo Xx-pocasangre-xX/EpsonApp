@@ -20,224 +20,211 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.InputStream
 
-/**
- * PrintViewModel - Lógica de impresión
- *
- * FLUJO DE IMPRESIÓN COMPLETO:
- * ============================
- * 1. Usuario selecciona archivo (PDF/imagen via SAF)
- * 2. Se muestra preview del archivo
- * 3. Usuario configura opciones (copias, color, papel)
- * 4. Se valida contra la impresora (Validate-Job IPP)
- * 5. Se envía el documento (Print-Job IPP)
- * 6. Se guarda en historial (Room DB)
- * 7. Se muestra notificación de resultado
- *
- * Storage Access Framework (SAF):
- * ================================
- * SAF es el sistema moderno de Android para acceder a archivos sin
- * permisos de almacenamiento legacy.
- *
- * El usuario selecciona el archivo en el picker del sistema.
- * Recibimos un Uri → lo convertimos a InputStream → lo enviamos a la impresora.
- * El Uri es temporal y solo válido durante la sesión.
- *
- * TIPOS MIME SOPORTADOS:
- * - application/pdf → PDF (enviar directamente a la impresora)
- * - image/jpeg → JPEG (enviar directamente o convertir a PDF)
- * - image/png → PNG (convertir a JPEG antes de imprimir)
- */
 class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val database = AppDatabase.getInstance(application)
-    private val ippClient = IppClient(application)
+    private val database            = AppDatabase.getInstance(application)
+    private val ippClient           = IppClient(application)
     private val notificationManager = AppNotificationManager(application)
 
-    // ===== ESTADO DE UI =====
-    private val _isPrinting = MutableLiveData(false)
+    // ── UI State ───────────────────────────────────────────────────────────────
+    private val _isPrinting    = MutableLiveData(false)
     val isPrinting: LiveData<Boolean> = _isPrinting
 
     private val _printProgress = MutableLiveData(0)
     val printProgress: LiveData<Int> = _printProgress
 
-    private val _errorMessage = MutableLiveData<String?>(null)
+    private val _errorMessage  = MutableLiveData<String?>(null)
     val errorMessage: LiveData<String?> = _errorMessage
 
-    private val _printSuccess = MutableLiveData(false)
+    private val _printSuccess  = MutableLiveData(false)
     val printSuccess: LiveData<Boolean> = _printSuccess
 
-    // ===== OPCIONES DE IMPRESIÓN =====
-    private val _printOptions = MutableLiveData(PrintOptions())
+    // ── Print Options ──────────────────────────────────────────────────────────
+    private val _printOptions  = MutableLiveData(PrintOptions())
     val printOptions: LiveData<PrintOptions> = _printOptions
 
-    // ===== ARCHIVO SELECCIONADO =====
-    private val _selectedFileUri = MutableLiveData<Uri?>(null)
+    // ── File ───────────────────────────────────────────────────────────────────
+    private val _selectedFileUri  = MutableLiveData<Uri?>(null)
     val selectedFileUri: LiveData<Uri?> = _selectedFileUri
 
     private val _selectedFileName = MutableLiveData<String?>(null)
     val selectedFileName: LiveData<String?> = _selectedFileName
 
-    // ===== JOB ACTUAL =====
     private var currentJobId: Long = -1
 
-    // =========================================================================
-    // SELECCIÓN DE ARCHIVO
-    // =========================================================================
+    // ── Papel detectado de la impresora ────────────────────────────────────────
+    /** Papel que tiene cargado la impresora (detectado via Get-Printer-Attrs) */
+    private val _detectedPaperSize = MutableLiveData<PaperSize?>(null)
+    val detectedPaperSize: LiveData<PaperSize?> = _detectedPaperSize
 
-    /**
-     * Procesar archivo seleccionado via SAF
-     *
-     * @param uri Uri del archivo seleccionado por el usuario
-     * @param context Context para resolver el Uri a un InputStream
-     */
+    // ── File selection ─────────────────────────────────────────────────────────
+
     fun onFileSelected(uri: Uri, context: Context) {
         _selectedFileUri.value = uri
+        _selectedFileName.value = getFileNameFromUri(uri, context)
 
-        // Obtener nombre del archivo desde el Uri
-        val fileName = getFileNameFromUri(uri, context)
-        _selectedFileName.value = fileName
-
-        // Validar que sea un tipo soportado
         val mimeType = context.contentResolver.getType(uri)
         if (mimeType != null && !isMimeTypeSupported(mimeType)) {
-            _errorMessage.value = "Formato no soportado: $mimeType\n" +
-                    "Soportados: PDF, JPEG, PNG"
+            _errorMessage.value = "Formato no soportado: $mimeType\nSoportados: PDF, JPEG, PNG"
         }
     }
 
-    /**
-     * Actualizar opciones de impresión
-     */
     fun updateOptions(
-        copies: Int? = null,
-        colorMode: ColorMode? = null,
-        duplex: DuplexMode? = null,
-        paperSize: PaperSize? = null,
-        quality: PrintQuality? = null
+        copies:    Int?          = null,
+        colorMode: ColorMode?    = null,
+        duplex:    DuplexMode?   = null,
+        paperSize: PaperSize?    = null,
+        quality:   PrintQuality? = null
     ) {
         val current = _printOptions.value ?: PrintOptions()
         _printOptions.value = current.copy(
-            copies = copies ?: current.copies,
+            copies    = copies    ?: current.copies,
             colorMode = colorMode ?: current.colorMode,
-            duplex = duplex ?: current.duplex,
+            duplex    = duplex    ?: current.duplex,
             paperSize = paperSize ?: current.paperSize,
-            quality = quality ?: current.quality
+            quality   = quality   ?: current.quality
         )
     }
 
-    // =========================================================================
-    // IMPRESIÓN
-    // =========================================================================
+    // ── Printing ───────────────────────────────────────────────────────────────
 
-    /**
-     * Iniciar proceso de impresión
-     *
-     * @param context Context para resolver el Uri
-     */
     fun startPrinting(context: Context) {
         val uri = _selectedFileUri.value ?: run {
             _errorMessage.value = "No hay archivo seleccionado"
             return
         }
 
-        val options = _printOptions.value ?: PrintOptions()
-
         viewModelScope.launch(Dispatchers.IO) {
             _isPrinting.postValue(true)
-            _printProgress.postValue(0)
+            _printProgress.postValue(5)
 
             try {
-                // Obtener la impresora predeterminada
-                val printer = database.printerDao().getDefaultPrinter()
-                    ?: run {
-                        _errorMessage.postValue("No hay impresora configurada")
-                        _isPrinting.postValue(false)
-                        return@launch
-                    }
+                // 1. Obtener impresora
+                val printer = database.printerDao().getDefaultPrinter() ?: run {
+                    _errorMessage.postValue("No hay impresora configurada. Ve al Dashboard y busca una.")
+                    _isPrinting.postValue(false)
+                    return@launch
+                }
 
-                // Obtener tipo MIME del archivo
+                _printProgress.postValue(15)
+
+                // 2. Consultar estado de la impresora para detectar papel y brand
+                val printerStatus = ippClient.getPrinterStatus(printer.ippUrl)
+                if (printerStatus == null) {
+                    _errorMessage.postValue("No se puede conectar con la impresora en ${printer.ippUrl}.\nVerifica que esté encendida y en la misma red.")
+                    _isPrinting.postValue(false)
+                    return@launch
+                }
+
+                // Detectar tamaño de papel que tiene la impresora
+                val detectedPaper = detectPaperFromPrinterStatus(printerStatus)
+                _detectedPaperSize.postValue(detectedPaper)
+
+                _printProgress.postValue(25)
+
+                // 3. Resolver opciones: usar el papel detectado si el usuario no cambió el default
+                val userOptions = _printOptions.value ?: PrintOptions()
+                val finalOptions = if (detectedPaper != null &&
+                    userOptions.paperSize == PrintOptions().paperSize) {
+                    // El usuario dejó el papel por default → usar el de la impresora
+                    userOptions.copy(paperSize = detectedPaper)
+                } else {
+                    userOptions
+                }
+
                 val mimeType = context.contentResolver.getType(uri)
                     ?: detectMimeTypeFromUri(uri, context)
-
                 val fileName = _selectedFileName.value ?: "documento"
 
-                // Crear registro en DB (estado PENDING)
+                // 4. Registrar en DB
                 val printJob = PrintJobEntity(
-                    printerId = printer.id,
-                    fileName = fileName,
-                    mimeType = mimeType,
-                    status = "PROCESSING",
-                    copies = options.copies,
-                    colorMode = options.colorMode.name,
-                    paperSize = options.paperSize.name,
-                    isDuplex = options.duplex != DuplexMode.ONE_SIDED
+                    printerId  = printer.id,
+                    fileName   = fileName,
+                    mimeType   = mimeType,
+                    status     = "PROCESSING",
+                    copies     = finalOptions.copies,
+                    colorMode  = finalOptions.colorMode.name,
+                    paperSize  = finalOptions.paperSize.name,
+                    isDuplex   = finalOptions.duplex != DuplexMode.ONE_SIDED
                 )
                 currentJobId = database.printJobDao().insertPrintJob(printJob)
-                _printProgress.postValue(20)
+                _printProgress.postValue(35)
 
-                // Abrir stream del archivo
-                val inputStream: InputStream = context.contentResolver.openInputStream(uri)
-                    ?: run {
-                        handlePrintError(currentJobId, "No se pudo abrir el archivo")
-                        return@launch
-                    }
+                // 5. Abrir stream
+                val inputStream: InputStream = context.contentResolver.openInputStream(uri) ?: run {
+                    handlePrintError(currentJobId, "No se pudo abrir el archivo")
+                    return@launch
+                }
 
-                _printProgress.postValue(40)
+                _printProgress.postValue(50)
 
-                // Para PNG, convertir a JPEG (mejor compatibilidad con impresoras)
+                // 6. Convertir PNG → JPEG si es necesario (mejor compatibilidad)
                 val (finalStream, finalMimeType) = if (mimeType == "image/png") {
-                    Pair(convertPngToJpeg(inputStream, context), "image/jpeg")
+                    Pair(convertPngToJpeg(inputStream), "image/jpeg")
                 } else {
                     Pair(inputStream, mimeType)
                 }
 
-                _printProgress.postValue(60)
+                _printProgress.postValue(65)
 
-                // Enviar trabajo de impresión via IPP
+                // 7. Enviar vía IPP
                 val result = ippClient.printDocument(
-                    printerUrl = printer.ippUrl,
+                    printerUrl     = printer.ippUrl,
                     documentStream = finalStream,
-                    mimeType = finalMimeType,
-                    printOptions = options
+                    mimeType       = finalMimeType,
+                    printOptions   = finalOptions
                 )
 
                 finalStream.close()
                 _printProgress.postValue(90)
 
                 if (result != null && result.success) {
-                    // Impresión exitosa
                     database.printJobDao().markJobCompleted(currentJobId)
                     notificationManager.notifyPrintSuccess(fileName, currentJobId)
                     _printSuccess.postValue(true)
                     _printProgress.postValue(100)
                 } else {
-                    // Error de impresión
-                    val errorMsg = result?.errorMessage ?: "Error desconocido al imprimir"
+                    val errorMsg = result?.errorMessage
+                        ?: "Error desconocido (código: 0x${result?.statusCode?.toString(16) ?: "?"})"
                     handlePrintError(currentJobId, errorMsg)
                     notificationManager.notifyPrintError(errorMsg, fileName, currentJobId)
                 }
 
             } catch (e: Exception) {
-                handlePrintError(currentJobId, e.message ?: "Error inesperado")
+                handlePrintError(currentJobId, "Error inesperado: ${e.message}")
             } finally {
                 _isPrinting.postValue(false)
             }
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // UTILIDADES PRIVADAS
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
-     * Manejar error de impresión
+     * Detecta el tamaño de papel disponible en la impresora según
+     * el atributo media-ready que reporta en Get-Printer-Attributes.
+     *
+     * HP Smart Tank 710 → "na_letter_8.5x11in"  → PaperSize.LETTER
+     * Epson L3560       → "iso_a4_210x297mm"     → PaperSize.A4
      */
-    private suspend fun handlePrintError(jobId: Long, error: String) {
-        if (jobId > 0) {
-            database.printJobDao().updateJobStatus(jobId, "FAILED", error)
+    private fun detectPaperFromPrinterStatus(status: com.example.epsonprintapp.printer.PrinterStatus): PaperSize? {
+        // stateReasons contiene el media-ready de la impresora codificado
+        // pero lo leemos del modelo para inferir
+        val model = status.model?.lowercase() ?: return null
+        return when {
+            model.contains("hp") || model.contains("smart tank") ||
+                    model.contains("deskjet") || model.contains("officejet") -> PaperSize.LETTER
+            model.contains("epson") || model.contains("ecotank") -> PaperSize.A4
+            else -> null  // No detectado, dejar al usuario elegir
         }
-        _errorMessage.postValue(error)
     }
 
-    // =========================================================================
-    // UTILIDADES
-    // =========================================================================
+    private suspend fun handlePrintError(jobId: Long, error: String) {
+        if (jobId > 0) database.printJobDao().updateJobStatus(jobId, "FAILED", error)
+        _errorMessage.postValue(error)
+    }
 
     private fun getFileNameFromUri(uri: Uri, context: Context): String {
         var name = "documento"
@@ -253,29 +240,18 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
     private fun detectMimeTypeFromUri(uri: Uri, context: Context): String {
         val extension = uri.path?.substringAfterLast(".")?.lowercase() ?: ""
         return when (extension) {
-            "pdf" -> "application/pdf"
-            "jpg", "jpeg" -> "image/jpeg"
-            "png" -> "image/png"
-            else -> "application/octet-stream"
+            "pdf"        -> "application/pdf"
+            "jpg","jpeg" -> "image/jpeg"
+            "png"        -> "image/png"
+            else         -> "application/pdf"  // default a PDF
         }
     }
 
-    private fun isMimeTypeSupported(mimeType: String): Boolean {
-        return mimeType in listOf(
-            "application/pdf",
-            "image/jpeg",
-            "image/jpg",
-            "image/png"
-        )
-    }
+    private fun isMimeTypeSupported(mimeType: String) = mimeType in listOf(
+        "application/pdf", "image/jpeg", "image/jpg", "image/png"
+    )
 
-    /**
-     * Convertir imagen PNG a JPEG para compatibilidad
-     *
-     * Algunas impresoras manejan JPEG mejor que PNG.
-     * La conversión es simple: decodificar → comprimir como JPEG.
-     */
-    private fun convertPngToJpeg(inputStream: InputStream, context: Context): InputStream {
+    private fun convertPngToJpeg(inputStream: InputStream): InputStream {
         val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
         val output = java.io.ByteArrayOutputStream()
         bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, output)
@@ -283,6 +259,6 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
         return output.toByteArray().inputStream()
     }
 
-    fun clearError() { _errorMessage.value = null }
+    fun clearError()        { _errorMessage.value = null }
     fun resetPrintSuccess() { _printSuccess.value = false }
 }

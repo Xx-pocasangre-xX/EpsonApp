@@ -1,11 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    fragment_notifications.xml
-    Lista de notificaciones persistentes (Room → RecyclerView).
-    - Swipe izquierda/derecha para eliminar
-    - Mensaje vacío cuando no hay notificaciones
-    - Contador de no leídas
--->
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -19,7 +12,8 @@
         android:layout_height="48dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:paddingHorizontal="16dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
         android:background="?attr/colorSurface">
 
         <TextView
@@ -53,9 +47,14 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:clipToPadding="false"
-        android:paddingVertical="8dp"/>
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"/>
 
-    <!-- Estado vacío -->
+    <!--
+        FIX: el código hace view.findViewById(R.id.tvEmpty) y lo usa con
+        View.VISIBLE / View.GONE. En el Fragment se referencia como View (no TextView),
+        así que puede ser cualquier ViewGroup. Lo dejamos como LinearLayout con id tvEmpty.
+    -->
     <LinearLayout
         android:id="@+id/tvEmpty"
         android:layout_width="match_parent"

@@ -1,39 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    themes.xml — Tema principal de la aplicación.
-
-    Usa Material3 (Material You) con paleta azul Epson.
-    El tema base hereda de Theme.Material3.DayNight.NoActionBar
-    para que la ActionBar sea gestionada por la Toolbar de cada Fragment.
--->
 <resources>
 
-    <!-- ── Tema base (hereda automáticamente light/dark) ──────────────── -->
-    <style name="Theme.EpsonPrint" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.EpsonPrint" parent="Theme.Material3.Light.NoActionBar">
 
-        <!-- Colores primarios -->
         <item name="colorPrimary">@color/md_theme_light_primary</item>
         <item name="colorOnPrimary">@color/md_theme_light_onPrimary</item>
         <item name="colorPrimaryContainer">@color/md_theme_light_primaryContainer</item>
         <item name="colorOnPrimaryContainer">@color/md_theme_light_onPrimaryContainer</item>
 
-        <!-- Colores secundarios -->
         <item name="colorSecondary">@color/md_theme_light_secondary</item>
         <item name="colorOnSecondary">@color/md_theme_light_onSecondary</item>
         <item name="colorSecondaryContainer">@color/md_theme_light_secondaryContainer</item>
         <item name="colorOnSecondaryContainer">@color/md_theme_light_onSecondaryContainer</item>
 
-        <!-- Terciario -->
         <item name="colorTertiary">@color/md_theme_light_tertiary</item>
         <item name="colorOnTertiary">@color/md_theme_light_onTertiary</item>
 
-        <!-- Error -->
         <item name="colorError">@color/md_theme_light_error</item>
         <item name="colorOnError">@color/md_theme_light_onError</item>
         <item name="colorErrorContainer">@color/md_theme_light_errorContainer</item>
         <item name="colorOnErrorContainer">@color/md_theme_light_onErrorContainer</item>
 
-        <!-- Superficies -->
         <item name="android:colorBackground">@color/md_theme_light_background</item>
         <item name="colorOnBackground">@color/md_theme_light_onBackground</item>
         <item name="colorSurface">@color/md_theme_light_surface</item>
@@ -42,26 +29,24 @@
         <item name="colorOnSurfaceVariant">@color/md_theme_light_onSurfaceVariant</item>
         <item name="colorOutline">@color/md_theme_light_outline</item>
 
-        <!-- Barra de estado transparente con íconos oscuros -->
+        <!-- Status bar transparente con íconos oscuros -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
-
-        <!-- Barra de navegación del sistema -->
         <item name="android:navigationBarColor">@color/md_theme_light_surface</item>
+        <!-- Permite que el contenido se extienda detrás de la status bar -->
+        <item name="android:windowTranslucentStatus">false</item>
+        <item name="android:windowTranslucentNavigation">false</item>
 
-        <!-- Forma de los componentes (redondeados) -->
         <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.EpsonPrint.Small</item>
         <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.EpsonPrint.Medium</item>
         <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.EpsonPrint.Large</item>
 
     </style>
 
-    <!-- ── Tema para el SplashScreen ──────────────────────────────────── -->
     <style name="Theme.EpsonPrint.Splash" parent="Theme.EpsonPrint">
         <item name="android:windowBackground">@color/md_theme_light_primary</item>
     </style>
 
-    <!-- ── Formas redondeadas ─────────────────────────────────────────── -->
     <style name="ShapeAppearance.EpsonPrint.Small" parent="ShapeAppearance.Material3.SmallComponent">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">8dp</item>
@@ -77,7 +62,6 @@
         <item name="cornerSize">16dp</item>
     </style>
 
-    <!-- ── Estilos de texto personalizados ──────────────────────────── -->
     <style name="TextAppearance.EpsonPrint.SectionTitle"
         parent="TextAppearance.Material3.LabelLarge">
         <item name="android:textColor">@color/text_secondary</item>
@@ -90,7 +74,6 @@
         <item name="android:textStyle">normal</item>
     </style>
 
-    <!-- ── Estilo del BottomNavigationView ──────────────────────────── -->
     <style name="Widget.EpsonPrint.BottomNavigationView"
         parent="Widget.Material3.BottomNavigationView">
         <item name="itemIconTint">@color/bottom_nav_color</item>
