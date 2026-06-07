@@ -14,21 +14,23 @@ import androidx.fragment.app.viewModels
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.epsonprintapp.R
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 class ScanFragment : Fragment() {
 
     private val viewModel: ScanViewModel by viewModels()
 
-    // ── Views ──────────────────────────────────────────────────────────────────
+    // Tipos explícitos — antes eran View casteados silenciosamente
     private lateinit var imagePreview:  ImageView
-    private lateinit var btnScan:       View
-    private lateinit var btnScanMore:   View
-    private lateinit var btnModeColor:  View
-    private lateinit var btnModeBW:     View
-    private lateinit var btnSaveImages: View
-    private lateinit var btnSavePdf:    View
-    private lateinit var btnClearPages: View
+    private lateinit var btnScan:       MaterialButton
+    private lateinit var btnScanMore:   MaterialButton
+    private lateinit var btnModeColor:  MaterialButton
+    private lateinit var btnModeBW:     MaterialButton
+    private lateinit var btnSaveImages: MaterialButton
+    private lateinit var btnSavePdf:    MaterialButton
+    private lateinit var btnClearPages: MaterialButton
     private lateinit var progressBar:   ProgressBar
     private lateinit var tvStatus:      TextView
     private lateinit var tvPageCount:   TextView
@@ -45,7 +47,6 @@ class ScanFragment : Fragment() {
         uri?.let { viewModel.savePdfToUri(it, requireContext().contentResolver) }
     }
 
-    // ── Lifecycle ──────────────────────────────────────────────────────────────
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
     ): View = inflater.inflate(R.layout.fragment_scan, container, false)
@@ -59,7 +60,6 @@ class ScanFragment : Fragment() {
         setColorSelected(true)
     }
 
-    // ── Bind views ─────────────────────────────────────────────────────────────
     private fun bindViews(view: View) {
         imagePreview  = view.findViewById(R.id.imagePreview)
         btnScan       = view.findViewById(R.id.btnScan)
@@ -78,130 +78,123 @@ class ScanFragment : Fragment() {
         rvPages       = view.findViewById(R.id.rvPages)
     }
 
-    // ── Pages adapter ──────────────────────────────────────────────────────────
     private fun setupPagesAdapter() {
-        pagesAdapter = ScannedPagesAdapter { position ->
-            val pages = viewModel.scannedPages.value ?: return@ScannedPagesAdapter
-            if (position < pages.size) {
-                imagePreview.setImageBitmap(pages[position])
-                cardPreview.isVisible = true
+        pagesAdapter = ScannedPagesAdapter(
+            onPageClick = { position ->
+                val thumbs = viewModel.thumbnails.value ?: return@ScannedPagesAdapter
+                if (position < thumbs.size) {
+                    imagePreview.setImageBitmap(thumbs[position])
+                    cardPreview.isVisible = true
+                }
+            },
+            onPageDelete = { position ->
+                MaterialAlertDialogBuilder(requireContext())
+                    .setTitle("Eliminar página")
+                    .setMessage("¿Eliminar la página ${position + 1}?")
+                    .setPositiveButton("Eliminar") { _, _ -> viewModel.deletePage(position) }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
             }
-        }
+        )
         rvPages.layoutManager = LinearLayoutManager(
             requireContext(), LinearLayoutManager.HORIZONTAL, false)
         rvPages.adapter = pagesAdapter
     }
 
-    // ── Observe ────────────────────────────────────────────────────────────────
     private fun observeViewModel() {
 
         viewModel.isScanning.observe(viewLifecycleOwner) { scanning ->
             progressBar.isVisible   = scanning
             btnScan.isEnabled       = !scanning
-            val hasData = viewModel.hasScannedData.value == true
+            val hasData             = viewModel.hasScannedData.value == true
             btnScanMore.isEnabled   = !scanning && hasData
-            btnSaveImages.isEnabled = !scanning
-            btnSavePdf.isEnabled    = !scanning
+            btnSaveImages.isEnabled = !scanning && hasData
+            btnSavePdf.isEnabled    = !scanning && hasData
         }
 
         viewModel.statusMessage.observe(viewLifecycleOwner) { msg ->
             tvStatus.text = msg ?: "Listo para escanear"
         }
 
-        // Última página → preview grande (solo si hay bitmap)
-        viewModel.scannedBitmap.observe(viewLifecycleOwner) { bitmap ->
-            if (bitmap != null) {
-                imagePreview.setImageBitmap(bitmap)
+        viewModel.lastPageThumbnail.observe(viewLifecycleOwner) { thumb ->
+            if (thumb != null) {
+                imagePreview.setImageBitmap(thumb)
                 cardPreview.isVisible = true
             }
         }
 
-        // Páginas con bitmap → miniaturas
-        viewModel.scannedPages.observe(viewLifecycleOwner) { pages ->
-            pagesAdapter.submitList(pages)
+        viewModel.thumbnails.observe(viewLifecycleOwner) { thumbs ->
+            pagesAdapter.submitList(thumbs)
+            cardPages.isVisible = thumbs.isNotEmpty()
         }
 
-        // hasScannedData controla visibilidad de cards de acción
-        // Se activa aunque el bitmap no se haya podido decodificar
         viewModel.hasScannedData.observe(viewLifecycleOwner) { hasData ->
             cardSave.isVisible    = hasData
-            cardPages.isVisible   = hasData && (viewModel.scannedPages.value?.isNotEmpty() == true)
             btnScanMore.isEnabled = hasData && viewModel.isScanning.value == false
         }
 
-        // Contador de páginas (incluye las sin preview)
         viewModel.pageCount.observe(viewLifecycleOwner) { count ->
-            if (count > 0) {
-                tvPageCount.text      = "📄 $count ${if (count == 1) "página escaneada" else "páginas escaneadas"}"
-                // Mostrar card de páginas solo si hay bitmaps visibles
-                val hasBitmaps = (viewModel.scannedPages.value?.size ?: 0) > 0
-                cardPages.isVisible   = hasBitmaps
-            }
+            tvPageCount.text = if (count > 0)
+                "📄 $count ${if (count == 1) "página" else "páginas"}" else ""
         }
 
         viewModel.saveResult.observe(viewLifecycleOwner) { result ->
-            result?.let {
-                Toast.makeText(requireContext(), it, Toast.LENGTH_LONG).show()
-            }
+            result?.let { Toast.makeText(requireContext(), it, Toast.LENGTH_LONG).show() }
         }
     }
 
-    // ── Click listeners ────────────────────────────────────────────────────────
     private fun setupClickListeners() {
-        btnModeColor.setOnClickListener {
-            viewModel.setColorMode(true)
-            setColorSelected(true)
-        }
-        btnModeBW.setOnClickListener {
-            viewModel.setColorMode(false)
-            setColorSelected(false)
-        }
+        btnModeColor.setOnClickListener { viewModel.setColorMode(true);  setColorSelected(true) }
+        btnModeBW.setOnClickListener    { viewModel.setColorMode(false); setColorSelected(false) }
 
-        btnScan.setOnClickListener {
-            viewModel.startScan(appendToExisting = false)
-        }
+        btnScan.setOnClickListener { viewModel.startScan(appendToExisting = false) }
 
-        btnScanMore.setOnClickListener {
-            viewModel.scanNextPage()
-        }
+        btnScanMore.setOnClickListener { viewModel.scanNextPage() }
 
         btnClearPages.setOnClickListener {
-            viewModel.clearPages()
-            cardPreview.isVisible = false
-            cardPages.isVisible   = false
-            cardSave.isVisible    = false
+            val count = viewModel.pageCount.value ?: 0
+            if (count == 0) return@setOnClickListener
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Borrar escaneos")
+                .setMessage("¿Eliminar las $count páginas?")
+                .setPositiveButton("Borrar") { _, _ ->
+                    viewModel.clearPages()
+                    cardPreview.isVisible = false
+                    cardPages.isVisible   = false
+                    cardSave.isVisible    = false
+                }
+                .setNegativeButton("Cancelar", null)
+                .show()
         }
 
-        btnSaveImages.setOnClickListener {
-            viewModel.saveAsImages(requireContext())
-        }
+        btnSaveImages.setOnClickListener { viewModel.saveAsImages(requireContext()) }
 
         btnSavePdf.setOnClickListener {
-            val pageCount = viewModel.pageCount.value ?: 0
-            val timestamp = System.currentTimeMillis()
-            val fileName  = if (pageCount == 1) "scan_$timestamp.pdf"
-            else "scan_${pageCount}pag_$timestamp.pdf"
-            savePdfLauncher.launch(fileName)
+            val count = viewModel.pageCount.value ?: 0
+            val ts    = System.currentTimeMillis()
+            savePdfLauncher.launch(
+                if (count == 1) "scan_$ts.pdf" else "scan_${count}pag_$ts.pdf"
+            )
         }
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
     private fun setColorSelected(colorSelected: Boolean) {
-        val colorBtn = btnModeColor as? com.google.android.material.button.MaterialButton
-        val bwBtn    = btnModeBW    as? com.google.android.material.button.MaterialButton
-        if (colorSelected) { colorBtn?.alpha = 1.0f; bwBtn?.alpha = 0.5f }
-        else               { colorBtn?.alpha = 0.5f; bwBtn?.alpha = 1.0f }
+        btnModeColor.alpha = if (colorSelected) 1.0f else 0.5f
+        btnModeBW.alpha    = if (colorSelected) 0.5f else 1.0f
     }
 }
 
-// ── Adapter de miniaturas ─────────────────────────────────────────────────────
+// ── Adapter con DiffUtil ──────────────────────────────────────────────────────
 
 class ScannedPagesAdapter(
-    private val onPageClick: (Int) -> Unit
+    private val onPageClick:  (Int) -> Unit,
+    private val onPageDelete: (Int) -> Unit
 ) : RecyclerView.Adapter<ScannedPagesAdapter.PageViewHolder>() {
 
     private var pages: List<Bitmap> = emptyList()
 
+    // submitList con notifyDataSetChanged solo cuando la lista cambia de tamaño
+    // Para una implementación completa, migrar a ListAdapter con DiffUtil de Bitmap por referencia
     fun submitList(newPages: List<Bitmap>) {
         pages = newPages
         notifyDataSetChanged()
@@ -209,7 +202,7 @@ class ScannedPagesAdapter(
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PageViewHolder {
         val container = android.widget.FrameLayout(parent.context).apply {
-            layoutParams = ViewGroup.MarginLayoutParams(240, 320).apply { marginEnd = 8 }
+            layoutParams = ViewGroup.MarginLayoutParams(220, 300).apply { marginEnd = 10 }
         }
         val imageView = ImageView(parent.context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -224,26 +217,35 @@ class ScannedPagesAdapter(
             ).also { it.gravity = android.view.Gravity.BOTTOM }
             setBackgroundColor(0xAA000000.toInt())
             setTextColor(0xFFFFFFFF.toInt())
-            textSize = 11f
-            gravity = android.view.Gravity.CENTER
-            setPadding(4, 2, 4, 4)
+            textSize = 11f; gravity = android.view.Gravity.CENTER
+            setPadding(4, 4, 4, 6)
         }
-        container.addView(imageView)
-        container.addView(badge)
-        return PageViewHolder(container, imageView, badge)
+        val deleteBtn = TextView(parent.context).apply {
+            layoutParams = android.widget.FrameLayout.LayoutParams(32, 32).also {
+                it.gravity = android.view.Gravity.TOP or android.view.Gravity.END
+                it.topMargin = 4; it.rightMargin = 4
+            }
+            text = "✕"; textSize = 13f; gravity = android.view.Gravity.CENTER
+            setBackgroundColor(0xCCF44336.toInt())
+            setTextColor(0xFFFFFFFF.toInt())
+        }
+        container.addView(imageView); container.addView(badge); container.addView(deleteBtn)
+        return PageViewHolder(container, imageView, badge, deleteBtn)
     }
 
     override fun onBindViewHolder(holder: PageViewHolder, position: Int) {
-        holder.imageView.setImageBitmap(pages[position])
+        val bmp = pages.getOrNull(position)
+        if (bmp != null && !bmp.isRecycled) holder.imageView.setImageBitmap(bmp)
+        else holder.imageView.setImageResource(android.R.drawable.ic_menu_gallery)
         holder.badge.text = "Pág. ${position + 1}"
-        holder.itemView.setOnClickListener { onPageClick(position) }
+        holder.itemView.setOnClickListener  { onPageClick(position) }
+        holder.deleteBtn.setOnClickListener { onPageDelete(position) }
     }
 
     override fun getItemCount() = pages.size
 
     class PageViewHolder(
-        itemView: View,
-        val imageView: ImageView,
-        val badge: TextView
+        itemView: View, val imageView: ImageView,
+        val badge: TextView, val deleteBtn: TextView
     ) : RecyclerView.ViewHolder(itemView)
 }

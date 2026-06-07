@@ -23,9 +23,7 @@ class DashboardFragment : Fragment() {
     private val viewModel: DashboardViewModel by viewModels()
 
     override fun onCreateView(
-        inflater: LayoutInflater,
-        container: ViewGroup?,
-        savedInstanceState: Bundle?
+        inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
     ): View {
         _binding = FragmentDashboardBinding.inflate(inflater, container, false)
         return binding.root
@@ -42,11 +40,9 @@ class DashboardFragment : Fragment() {
     private fun setupObservers() {
 
         viewModel.isWifiConnected.observe(viewLifecycleOwner) { isConnected ->
-            if (!isConnected) {
-                Toast.makeText(requireContext(),
-                    "Sin conexión WiFi. Conéctate a la misma red que la impresora.",
-                    Toast.LENGTH_LONG).show()
-            }
+            if (!isConnected) Toast.makeText(requireContext(),
+                "Sin conexión de red. Conéctate al WiFi de la red local.",
+                Toast.LENGTH_LONG).show()
         }
 
         viewModel.currentPrinter.observe(viewLifecycleOwner) { printer ->
@@ -68,9 +64,16 @@ class DashboardFragment : Fragment() {
             binding.layoutDiscovering.isVisible = isDiscovering
         }
 
+        // Progreso de descubrimiento en tiempo real
+        viewModel.discoveryProgress.observe(viewLifecycleOwner) { msg ->
+            if (!msg.isNullOrBlank()) {
+                binding.tvPrinterState.text = msg
+            }
+        }
+
         viewModel.unreadNotificationCount.observe(viewLifecycleOwner) { count ->
-            val label = if (count > 0) "🔔  Notificaciones ($count)" else "🔔  Notificaciones"
-            binding.btnNotifications.text = label
+            binding.btnNotifications.text =
+                if (count > 0) "🔔  Notificaciones ($count)" else "🔔  Notificaciones"
         }
 
         viewModel.errorMessage.observe(viewLifecycleOwner) { error ->
@@ -104,7 +107,6 @@ class DashboardFragment : Fragment() {
     // ── UI update ──────────────────────────────────────────────────────────────
 
     private fun updatePrinterStatusUI(status: com.example.epsonprintapp.printer.PrinterStatus) {
-
         binding.tvPrinterState.text = status.displayStatus
 
         val statusColor = when (status.state) {
@@ -118,16 +120,12 @@ class DashboardFragment : Fragment() {
             android.content.res.ColorStateList.valueOf(statusColor)
 
         binding.tvPaperStatus.text = if (status.hasPaper) "Con papel ✅" else "Sin papel ⚠️"
-        binding.tvPaperStatus.setTextColor(
-            ContextCompat.getColor(requireContext(),
-                if (status.hasPaper) R.color.status_online else R.color.status_warning)
-        )
+        binding.tvPaperStatus.setTextColor(ContextCompat.getColor(requireContext(),
+            if (status.hasPaper) R.color.status_online else R.color.status_warning))
 
         val ink = status.inkLevels
         binding.cardInk.isVisible = ink.isAvailable
-
         if (ink.isAvailable) {
-            // FIX: ViewBinding turns each <include> into an ItemInkLevelBinding, not a View
             updateInkRow(binding.inkBlack,   "Negro",    ink.black,   R.color.ink_black)
             updateInkRow(binding.inkCyan,    "Cian",     ink.cyan,    R.color.ink_cyan)
             updateInkRow(binding.inkMagenta, "Magenta",  ink.magenta, R.color.ink_magenta)
@@ -136,39 +134,52 @@ class DashboardFragment : Fragment() {
 
         val canPrint = status.state == PrinterState.IDLE && status.hasPaper
         val canScan  = status.state != PrinterState.STOPPED
-        binding.btnPrint.isEnabled = canPrint
-        binding.btnPrint.alpha     = if (canPrint) 1f else 0.5f
-        binding.btnScan.isEnabled  = canScan
-        binding.btnScan.alpha      = if (canScan) 1f else 0.5f
+        binding.btnPrint.isEnabled = canPrint; binding.btnPrint.alpha = if (canPrint) 1f else 0.5f
+        binding.btnScan.isEnabled  = canScan;  binding.btnScan.alpha  = if (canScan)  1f else 0.5f
     }
 
     /**
-     * When ViewBinding is enabled, <include> tags with an android:id become
-     * typed binding objects (ItemInkLevelBinding), not raw Views.
-     * Access child views directly through the binding instead of findViewById.
+     * Actualiza una fila de nivel de tinta.
+     *
+     * Corrección: antes cuando level < 0 la fila quedaba visible con "N/D".
+     * Ahora se oculta la fila si el nivel es desconocido (-1) y se muestra
+     * solo si el nivel es conocido (>= 0) o ilimitado (-2 para EcoTank).
      */
     private fun updateInkRow(
         inkBinding: ItemInkLevelBinding,
-        label: String,
-        level: Int,
-        colorRes: Int
+        label:      String,
+        level:      Int,
+        colorRes:   Int
     ) {
-        inkBinding.tvInkLabel.text = label
-
-        if (level >= 0) {
-            inkBinding.progressInk.progress = level
-            inkBinding.tvInkPercent.text    = "$level%"
-            val barColor = when {
-                level < 20 -> ContextCompat.getColor(requireContext(), R.color.ink_low)
-                level < 50 -> ContextCompat.getColor(requireContext(), R.color.ink_medium)
-                else       -> ContextCompat.getColor(requireContext(), colorRes)
+        when {
+            level == -2 -> {
+                // EcoTank: ilimitado (depósito recargable)
+                inkBinding.tvInkLabel.text   = label
+                inkBinding.tvInkPercent.text = "∞"
+                inkBinding.progressInk.progress = 100
+                inkBinding.progressInk.progressTintList =
+                    android.content.res.ColorStateList.valueOf(
+                        ContextCompat.getColor(requireContext(), colorRes))
+                inkBinding.root.isVisible = true
             }
-            inkBinding.progressInk.progressTintList =
-                android.content.res.ColorStateList.valueOf(barColor)
-            inkBinding.root.isVisible = true
-        } else {
-            inkBinding.tvInkPercent.text    = "N/D"
-            inkBinding.progressInk.progress = 0
+            level >= 0 -> {
+                // Nivel conocido
+                inkBinding.tvInkLabel.text   = label
+                inkBinding.progressInk.progress = level
+                inkBinding.tvInkPercent.text = "$level%"
+                val barColor = when {
+                    level < 20 -> ContextCompat.getColor(requireContext(), R.color.ink_low)
+                    level < 50 -> ContextCompat.getColor(requireContext(), R.color.ink_medium)
+                    else       -> ContextCompat.getColor(requireContext(), colorRes)
+                }
+                inkBinding.progressInk.progressTintList =
+                    android.content.res.ColorStateList.valueOf(barColor)
+                inkBinding.root.isVisible = true
+            }
+            else -> {
+                // level == -1: desconocido → ocultar la fila
+                inkBinding.root.isVisible = false
+            }
         }
     }
 
@@ -176,8 +187,7 @@ class DashboardFragment : Fragment() {
         binding.tvPrinterState.text = getString(R.string.printer_state_offline)
         binding.viewStatusIndicator.backgroundTintList =
             android.content.res.ColorStateList.valueOf(
-                ContextCompat.getColor(requireContext(), R.color.status_unknown)
-            )
+                ContextCompat.getColor(requireContext(), R.color.status_unknown))
         binding.tvPaperStatus.text = getString(R.string.paper_unknown)
         binding.btnPrint.isEnabled = false
         binding.btnScan.isEnabled  = false

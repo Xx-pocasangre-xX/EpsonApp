@@ -6,21 +6,39 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.example.epsonprintapp.EpsonPrintApp
-import com.example.epsonprintapp.MainActivity          // FIX: correct package
+import com.example.epsonprintapp.MainActivity
 import com.example.epsonprintapp.R
 import com.example.epsonprintapp.database.AppDatabase
 import com.example.epsonprintapp.database.entities.NotificationEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
+/**
+ * AppNotificationManager — Gestiona notificaciones del sistema y base de datos.
+ *
+ * Corrección: el CoroutineScope anterior usaba CoroutineScope(Dispatchers.IO)
+ * sin SupervisorJob ni forma de cancelarlo, creando un scope huérfano que vivía
+ * indefinidamente. Ahora usa SupervisorJob() para poder cancelarlo con cancel().
+ *
+ * Uso: llamar cancel() cuando el componente propietario se destruya.
+ * En la práctica, esta clase se usa desde ViewModels que tienen viewModelScope,
+ * por lo que el scope de este manager es redundante y se puede delegar.
+ * Lo mantenemos encapsulado aquí para no cambiar la interfaz pública.
+ */
 class AppNotificationManager(private val context: Context) {
 
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     private val database = AppDatabase.getInstance(context)
-    private val scope = CoroutineScope(Dispatchers.IO)
+
+    // SupervisorJob permite cancelar el scope externamente y no propaga
+    // fallos de una coroutine a las demás del mismo scope
+    private val job   = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + job)
 
     companion object {
         const val NOTIF_ID_PRINTING = 1001
@@ -29,100 +47,93 @@ class AppNotificationManager(private val context: Context) {
         const val NOTIF_ID_INK      = 1004
     }
 
-    // ── Print ──────────────────────────────────────────────────────────────────
+    // ── Impresión ─────────────────────────────────────────────────────────────
 
     fun notifyPrintSuccess(fileName: String, jobId: Long = -1) {
-        val title = "✅ Impresión completada"
-        val message = "'$fileName' se imprimió correctamente"
+        val title          = "✅ Impresión completada"
+        val message        = "'$fileName' se imprimió correctamente"
         val recommendation = "Recoge tu documento de la impresora"
         showSystemNotification(NOTIF_ID_PRINTING, EpsonPrintApp.CHANNEL_PRINT, title, message)
         saveToDatabase("PRINT_SUCCESS", title, message, recommendation, "INFO", jobId)
     }
 
     fun notifyPrintError(errorReason: String, fileName: String, jobId: Long = -1) {
-        val (friendlyMessage, recommendation) = interpretPrintError(errorReason)
-        val title = "❌ Error de impresión"
-        val fullMessage = "'$fileName': $friendlyMessage"
-        showSystemNotification(NOTIF_ID_ERROR, EpsonPrintApp.CHANNEL_ALERTS, title, fullMessage,
+        val (friendly, recommendation) = interpretPrintError(errorReason)
+        val title   = "❌ Error de impresión"
+        val message = "'$fileName': $friendly"
+        showSystemNotification(NOTIF_ID_ERROR, EpsonPrintApp.CHANNEL_ALERTS, title, message,
             NotificationCompat.PRIORITY_HIGH)
-        saveToDatabase("PRINT_ERROR", title, fullMessage, recommendation, "ERROR", jobId)
+        saveToDatabase("PRINT_ERROR", title, message, recommendation, "ERROR", jobId)
     }
 
-    // ── Scan ───────────────────────────────────────────────────────────────────
+    // ── Escaneo ───────────────────────────────────────────────────────────────
 
     fun notifyScanSuccess(filePath: String, jobId: Long = -1) {
-        val fileName = filePath.substringAfterLast("/")
-        val title = "✅ Escaneo completado"
-        val message = "Documento guardado: $fileName"
-        val recommendation = "Puedes encontrarlo en la pantalla de escaneos recientes"
+        val fileName       = filePath.substringAfterLast("/")
+        val title          = "✅ Escaneo completado"
+        val message        = "Guardado: $fileName"
+        val recommendation = "Encuéntralo en la pantalla de escaneos recientes"
         showSystemNotification(NOTIF_ID_SCANNING, EpsonPrintApp.CHANNEL_SCAN, title, message)
         saveToDatabase("SCAN_SUCCESS", title, message, recommendation, "INFO", jobId)
     }
 
     fun notifyScanError(errorMessage: String, jobId: Long = -1) {
-        val title = "❌ Error de escaneo"
+        val title                      = "❌ Error de escaneo"
         val (friendly, recommendation) = interpretScanError(errorMessage)
         showSystemNotification(NOTIF_ID_ERROR, EpsonPrintApp.CHANNEL_ALERTS, title, friendly,
             NotificationCompat.PRIORITY_HIGH)
         saveToDatabase("SCAN_ERROR", title, friendly, recommendation, "ERROR", jobId)
     }
 
-    // ── Printer state ──────────────────────────────────────────────────────────
+    // ── Estado impresora ──────────────────────────────────────────────────────
 
     fun notifyInkLow(color: String, levelPercent: Int) {
-        val colorName = when (color.lowercase()) {
-            "cyan"    -> "Cian"
-            "magenta" -> "Magenta"
-            "yellow"  -> "Amarillo"
-            "black"   -> "Negro"
-            else      -> color
-        }
-        val title = "⚠️ Tinta $colorName baja"
-        val message = "Nivel de tinta $colorName: $levelPercent%"
-        val recommendation = "Recarga la tinta $colorName pronto para evitar interrupciones"
+        val colorName = mapOf(
+            "cyan" to "Cian", "magenta" to "Magenta",
+            "yellow" to "Amarillo", "black" to "Negro"
+        )[color.lowercase()] ?: color
+        val title          = "⚠️ Tinta $colorName baja"
+        val message        = "Nivel: $levelPercent%"
+        val recommendation = "Recarga la tinta $colorName pronto"
         showSystemNotification(NOTIF_ID_INK, EpsonPrintApp.CHANNEL_ALERTS, title, message)
         saveToDatabase("INK_LOW", title, message, recommendation, "WARNING")
     }
 
     fun notifyNoPaper() {
-        val title = "📄 Sin papel"
-        val message = "La impresora no tiene papel"
-        val recommendation = "Agrega hojas de papel en la bandeja de entrada y reinicia la impresión"
+        val title          = "📄 Sin papel"
+        val message        = "La impresora no tiene papel"
+        val recommendation = "Agrega hojas en la bandeja de entrada"
         showSystemNotification(NOTIF_ID_ERROR, EpsonPrintApp.CHANNEL_ALERTS, title, message,
             NotificationCompat.PRIORITY_HIGH)
         saveToDatabase("NO_PAPER", title, message, recommendation, "WARNING")
     }
 
     fun notifyPrinterOffline() {
-        val title = "📡 Impresora desconectada"
-        val message = "No se puede conectar con la impresora"
-        val recommendation = "Verifica que la impresora esté encendida y conectada al mismo WiFi"
+        val title          = "📡 Impresora desconectada"
+        val message        = "No se puede conectar con la impresora"
+        val recommendation = "Verifica que esté encendida y en la misma red WiFi"
         showSystemNotification(NOTIF_ID_ERROR, EpsonPrintApp.CHANNEL_ALERTS, title, message)
         saveToDatabase("PRINTER_OFFLINE", title, message, recommendation, "ERROR")
     }
 
-    // ── Private helpers ────────────────────────────────────────────────────────
+    // ── Privados ──────────────────────────────────────────────────────────────
 
     private fun showSystemNotification(
-        id: Int,
+        id:        Int,
         channelId: String,
-        title: String,
-        message: String,
-        priority: Int = NotificationCompat.PRIORITY_DEFAULT
+        title:     String,
+        message:   String,
+        priority:  Int = NotificationCompat.PRIORITY_DEFAULT
     ) {
-        // FIX: build PendingIntent correctly (no apply block — use explicit flags directly)
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
         val pendingIntent = PendingIntent.getActivity(
-            context,
-            0,
-            intent,
+            context, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
         val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.drawable.ic_print)   // FIX: use ic_print (ic_printer_notification doesn't exist)
+            .setSmallIcon(R.drawable.ic_print)
             .setContentTitle(title)
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
@@ -130,64 +141,57 @@ class AppNotificationManager(private val context: Context) {
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .build()
-
         notificationManager.notify(id, notification)
     }
 
     private fun saveToDatabase(
-        type: String,
-        title: String,
-        message: String,
+        type:           String,
+        title:          String,
+        message:        String,
         recommendation: String? = null,
-        severity: String = "INFO",
-        relatedJobId: Long? = null
+        severity:       String  = "INFO",
+        relatedJobId:   Long?   = null
     ) {
         scope.launch {
-            val notification = NotificationEntity(
-                type = type,
-                title = title,
-                message = message,
-                recommendation = recommendation,
-                severity = severity,
-                relatedJobId = relatedJobId
-            )
-            database.notificationDao().insertNotification(notification)
+            runCatching {
+                database.notificationDao().insertNotification(
+                    NotificationEntity(
+                        type           = type,
+                        title          = title,
+                        message        = message,
+                        recommendation = recommendation,
+                        severity       = severity,
+                        relatedJobId   = relatedJobId
+                    )
+                )
+            }
         }
     }
 
-    private fun interpretPrintError(reason: String): Pair<String, String> {
-        return when {
-            reason.contains("media-empty")  -> Pair("Sin papel", "Agrega papel en la bandeja y reintenta la impresión")
-            reason.contains("media-jam")    -> Pair("Atasco de papel", "Abre la cubierta y retira el papel atascado cuidadosamente")
-            reason.contains("toner-empty") || reason.contains("marker-supply-empty") ->
-                Pair("Tinta agotada", "Recarga la tinta y reintenta la impresión")
-            reason.contains("toner-low")    -> Pair("Tinta baja", "Considera recargar la tinta pronto")
-            reason.contains("cover-open")   -> Pair("Cubierta abierta", "Cierra todas las cubiertas de la impresora")
-            reason.contains("offline")      -> Pair("Impresora offline", "Verifica que la impresora esté encendida y en la misma red WiFi")
-            reason.contains("document-format-not-supported") ->
-                Pair("Formato no soportado", "La impresora no puede imprimir este tipo de archivo")
-            reason.contains("service-unavailable") || reason.contains("503") ->
-                Pair("Servicio no disponible", "La impresora está ocupada. Espera un momento y reintenta")
-            reason.contains("bad-request") || reason.contains("400") ->
-                Pair("Error en la solicitud", "El documento puede estar corrupto. Intenta con otro archivo")
-            else -> Pair("Error: $reason", "Reinicia la impresora y vuelve a intentarlo")
-        }
+    private fun interpretPrintError(reason: String): Pair<String, String> = when {
+        reason.contains("media-empty")                                      -> Pair("Sin papel",              "Agrega papel en la bandeja")
+        reason.contains("media-jam")                                        -> Pair("Atasco de papel",        "Retira el papel atascado cuidadosamente")
+        reason.contains("toner-empty") || reason.contains("marker-supply-empty") -> Pair("Tinta agotada",   "Recarga la tinta")
+        reason.contains("cover-open")                                       -> Pair("Cubierta abierta",       "Cierra todas las cubiertas")
+        reason.contains("offline")                                          -> Pair("Impresora offline",      "Verifica WiFi y que esté encendida")
+        reason.contains("document-format-not-supported")                    -> Pair("Formato no soportado",  "Convierte el archivo a PDF o JPEG")
+        reason.contains("503") || reason.contains("service-unavailable")   -> Pair("Servicio no disponible","Espera un momento y reintenta")
+        reason.contains("0x400") || reason.contains("bad-request")         -> Pair("Error en petición",      "El archivo puede estar dañado")
+        else -> Pair("Error: $reason", "Reinicia la impresora e intenta de nuevo")
     }
 
-    private fun interpretScanError(reason: String): Pair<String, String> {
-        return when {
-            reason.contains("503") || reason.contains("busy") ->
-                Pair("Escáner ocupado", "Espera a que el escáner termine la operación actual")
-            reason.contains("404") ->
-                Pair("Trabajo de escaneo no encontrado", "El escaneo fue cancelado. Intenta de nuevo")
-            reason.contains("cover") ->
-                Pair("Cubierta del escáner abierta", "Cierra la cubierta del escáner correctamente")
-            reason.contains("paper") || reason.contains("feeder") ->
-                Pair("Problema con el papel en el ADF", "Retira el papel del alimentador y vuelve a colocarlo")
-            reason.contains("timeout") ->
-                Pair("Tiempo de espera agotado", "El escáner tardó demasiado. Verifica la conexión WiFi")
-            else ->
-                Pair("Error al escanear: $reason", "Verifica la conexión a la impresora e intenta de nuevo")
-        }
+    private fun interpretScanError(reason: String): Pair<String, String> = when {
+        reason.contains("503") || reason.contains("busy") -> Pair("Escáner ocupado",        "Espera a que termine")
+        reason.contains("404")                            -> Pair("Escaneo cancelado",       "Intenta de nuevo")
+        reason.contains("timeout")                        -> Pair("Tiempo de espera agotado","Verifica la conexión WiFi")
+        else -> Pair("Error: $reason", "Verifica la conexión e intenta de nuevo")
+    }
+
+    /**
+     * Cancelar el scope cuando el propietario se destruya.
+     * Llamar desde onCleared() del ViewModel que crea esta instancia.
+     */
+    fun cancel() {
+        job.cancel()
     }
 }

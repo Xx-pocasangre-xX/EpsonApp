@@ -12,7 +12,7 @@
         android:orientation="vertical"
         android:padding="16dp">
 
-        <!-- ── CARD: Modo de escaneo (simplificado) ───────────────────── -->
+        <!-- ── CARD: Modo de escaneo ───────────────────────────────────── -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -35,7 +35,6 @@
                     android:textColor="@color/text_primary"
                     android:layout_marginBottom="12dp"/>
 
-                <!-- Toggle Color / B&N -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -57,20 +56,19 @@
                         android:layout_height="48dp"
                         android:layout_weight="1"
                         android:layout_marginStart="6dp"
-                        android:text="⬛ Blanco/Negro"
+                        android:text="⬛ B/N"
                         app:cornerRadius="8dp"
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
 
                 </LinearLayout>
 
-                <!-- Nota informativa -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="ℹ️ Resolución 300 DPI · Papel A4 · JPEG automático"
-                    android:textSize="12sp"
+                    android:text="ℹ️ 300 DPI · A4 · JPEG · Páginas guardadas en disco"
+                    android:textSize="11sp"
                     android:textColor="@color/text_secondary"
-                    android:layout_marginTop="10dp"/>
+                    android:layout_marginTop="8dp"/>
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -93,7 +91,7 @@
             android:visibility="gone"
             android:layout_marginBottom="8dp"/>
 
-        <!-- Botones Escanear / + Agregar página -->
+        <!-- Botones Escanear / Agregar página -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -141,23 +139,40 @@
                 android:orientation="vertical"
                 android:padding="12dp">
 
-                <!-- Header con contador -->
+                <!-- Header: contador + info de tamaño + botón limpiar -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:gravity="center_vertical"
-                    android:layout_marginBottom="8dp">
+                    android:layout_marginBottom="4dp">
 
-                    <TextView
-                        android:id="@+id/tvPageCount"
+                    <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="📄 0 páginas"
-                        android:textSize="14sp"
-                        android:textStyle="bold"
-                        android:textColor="@color/text_primary"/>
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/tvPageCount"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📄 0 páginas"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            android:textColor="@color/text_primary"/>
+
+                        <!-- Info de tamaño en disco -->
+                        <TextView
+                            android:id="@+id/tvPageSize"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text=""
+                            android:textSize="11sp"
+                            android:textColor="@color/text_secondary"
+                            android:visibility="gone"/>
+
+                    </LinearLayout>
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnClearPages"
@@ -169,18 +184,27 @@
 
                 </LinearLayout>
 
+                <!-- Instrucción de uso -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Toca una página para verla · Toca ✕ para eliminarla"
+                    android:textSize="11sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginBottom="8dp"/>
+
                 <!-- Miniaturas horizontales -->
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/rvPages"
                     android:layout_width="match_parent"
-                    android:layout_height="140dp"
+                    android:layout_height="150dp"
                     android:orientation="horizontal"
                     app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"/>
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- ── Preview de la última página ───────────────────────────── -->
+        <!-- ── Preview de la página seleccionada ─────────────────────── -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardPreview"
             android:layout_width="match_parent"
@@ -199,7 +223,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Vista previa — última página"
+                    android:text="Vista previa (miniatura)"
                     android:textSize="12sp"
                     android:textColor="@color/text_secondary"
                     android:layout_marginBottom="6dp"/>
@@ -215,7 +239,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- ── CARD: Guardar (visible solo cuando hay páginas) ────────── -->
+        <!-- ── CARD: Guardar ──────────────────────────────────────────── -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardSave"
             android:layout_width="match_parent"
@@ -245,19 +269,17 @@
                     android:layout_height="wrap_content"
                     android:orientation="horizontal">
 
-                    <!-- Guardar como imagen(es) en galería -->
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnSaveImages"
                         android:layout_width="0dp"
                         android:layout_height="56dp"
                         android:layout_weight="1"
                         android:layout_marginEnd="6dp"
-                        android:text="🖼️ Imagen"
-                        android:textSize="15sp"
+                        android:text="🖼️ Imágenes"
+                        android:textSize="14sp"
                         app:cornerRadius="10dp"
                         style="@style/Widget.MaterialComponents.Button"/>
 
-                    <!-- Guardar como PDF (todas las páginas en uno) -->
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnSavePdf"
                         android:layout_width="0dp"
@@ -265,7 +287,7 @@
                         android:layout_weight="1"
                         android:layout_marginStart="6dp"
                         android:text="📄 PDF"
-                        android:textSize="15sp"
+                        android:textSize="14sp"
                         app:cornerRadius="10dp"
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
 
@@ -274,7 +296,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Imagen: guarda cada página en la galería\nPDF: une todas las páginas en un solo archivo"
+                    android:text="Imágenes: guarda cada página en Galería › Scans\nPDF: une todas las páginas en un solo archivo\n📌 PDF creado con API nativa de Android (sin dependencias externas)"
                     android:textSize="11sp"
                     android:textColor="@color/text_secondary"
                     android:layout_marginTop="8dp"/>

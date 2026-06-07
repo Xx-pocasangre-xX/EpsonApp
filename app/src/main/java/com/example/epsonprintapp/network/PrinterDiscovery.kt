@@ -6,20 +6,49 @@ import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.util.Log
+import com.example.epsonprintapp.AppConstants
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
+import java.net.InetSocketAddress
+import java.net.Socket
 
+/**
+ * PrinterDiscovery — Descubre CUALQUIER impresora de red.
+ *
+ * Estrategias (en orden):
+ * 1. mDNS — 6 tipos de servicio en paralelo (Epson, HP, Canon, Brother, Kyocera, Xerox…)
+ * 2. TCP scan — 254 hosts en paralelo como fallback (~2 segundos)
+ */
 class PrinterDiscovery(private val context: Context) {
 
     companion object {
         private const val TAG = "PrinterDiscovery"
-        const val SERVICE_TYPE_IPP     = "_ipp._tcp."
-        const val SERVICE_TYPE_SCANNER = "_scanner._tcp."
-        const val DEFAULT_IPP_PORT     = 631
-        const val DISCOVERY_TIMEOUT_MS = 30_000L
+
+        /** Todos los tipos de servicio mDNS de impresoras conocidos */
+        val SERVICE_TYPES = listOf(
+            "_ipp._tcp.",            // IPP estándar universal
+            "_ipps._tcp.",           // IPP sobre TLS
+            "_pdl-datastream._tcp.", // RAW/PDL (Kyocera, Xerox, Brother corporativo)
+            "_printer._tcp.",        // LPD clásico
+            "_print-caps._tcp.",     // Capacidades (algunos Brother)
+            "_scanner._tcp."         // Escáneres independientes
+        )
+
+        /** Puertos que indican que hay una impresora en ese host */
+        val PRINTER_PORTS = listOf(631, 9100, 515, 80)
+
+        const val DEFAULT_IPP_PORT = 631
+        const val DEFAULT_RAW_PORT = 9100
     }
 
     private val nsdManager: NsdManager by lazy {
@@ -30,246 +59,233 @@ class PrinterDiscovery(private val context: Context) {
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
     }
 
-    /**
-     * Verificar si hay conectividad de red local (no solo WiFi puro).
-     *
-     * FIX: el método anterior solo chequeaba TRANSPORT_WIFI, lo que
-     * falla si el dispositivo está en modo VPN, o si el sistema reporta
-     * la red como TRANSPORT_WIFI + TRANSPORT_VPN al mismo tiempo.
-     *
-     * La lógica correcta es:
-     * 1. ¿Hay red activa? → Si no, definitivamente sin conexión
-     * 2. ¿Tiene capacidad de red local (NOT_VPN o tiene WIFI)? → Conectado
-     * 3. Fallback: si WiFi está habilitado y conectado, asumir OK
-     */
-    fun isWifiConnected(): Boolean {
+    // ── Conectividad ──────────────────────────────────────────────────────────
+
+    fun isNetworkAvailable(): Boolean {
         return try {
-            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val network = cm.activeNetwork
-
-            if (network == null) {
-                Log.w(TAG, "No hay red activa")
-                return false
-            }
-
-            val capabilities = cm.getNetworkCapabilities(network)
-            if (capabilities == null) {
-                Log.w(TAG, "Sin capabilities de red, intentando fallback WiFi")
-                return isWifiEnabledFallback()
-            }
-
-            // Chequeo primario: tiene transporte WiFi O Ethernet (red local)
-            val hasLocalTransport = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-
-            // Chequeo secundario: tiene internet o red local (NOT necesariamente internet)
-            val hasConnectivity = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
-                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-
-            if (hasLocalTransport) {
-                Log.d(TAG, "Conectado vía WiFi/Ethernet")
-                return true
-            }
-
-            // Si hay VPN activa pero el WiFi subyacente está conectado, permitir
-            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-                val wifiEnabled = isWifiEnabledFallback()
-                Log.d(TAG, "Conexión VPN detectada, WiFi subyacente: $wifiEnabled")
-                return wifiEnabled
-            }
-
-            // Fallback final: si el adaptador WiFi está habilitado y tiene IP
-            Log.w(TAG, "Transport no identificado, usando fallback")
-            isWifiEnabledFallback()
-
+            val cm      = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = cm.activeNetwork ?: return false
+            val caps    = cm.getNetworkCapabilities(network) ?: return isWifiFallback()
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                    (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) && isWifiFallback())
         } catch (e: Exception) {
-            Log.e(TAG, "Error verificando conectividad: ${e.message}")
-            // En caso de error, asumir conectado para no bloquear al usuario
+            Log.e(TAG, "Error verificando red: ${e.message}")
             true
         }
     }
 
-    @Suppress("DEPRECATION")
-    private fun isWifiEnabledFallback(): Boolean {
-        return try {
-            val wifiInfo = wifiManager.connectionInfo
-            wifiManager.isWifiEnabled && wifiInfo != null && wifiInfo.networkId != -1
-        } catch (e: Exception) {
-            false
+    private fun isWifiFallback(): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val cm      = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = cm.activeNetwork ?: return false
+            val caps    = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        } else {
+            @Suppress("DEPRECATION")
+            val info = wifiManager.connectionInfo
+            wifiManager.isWifiEnabled && info != null && info.networkId != -1
         }
-    }
+    } catch (e: Exception) { false }
 
-    @Suppress("DEPRECATION")
     fun getDeviceIpAddress(): String {
         return try {
-            val wifiInfo = wifiManager.connectionInfo
-            val ipInt = wifiInfo.ipAddress
-            if (ipInt == 0) return "0.0.0.0"
-            String.format(
-                "%d.%d.%d.%d",
-                ipInt and 0xff,
-                (ipInt shr 8) and 0xff,
-                (ipInt shr 16) and 0xff,
-                (ipInt shr 24) and 0xff
-            )
-        } catch (e: Exception) {
-            "0.0.0.0"
-        }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val cm      = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val network = cm.activeNetwork ?: return "0.0.0.0"
+                val lp      = cm.getLinkProperties(network) ?: return "0.0.0.0"
+                lp.linkAddresses
+                    .firstOrNull { it.address is java.net.Inet4Address }
+                    ?.address?.hostAddress ?: "0.0.0.0"
+            } else {
+                @Suppress("DEPRECATION")
+                val ipInt = wifiManager.connectionInfo.ipAddress
+                if (ipInt == 0) return "0.0.0.0"
+                String.format(
+                    "%d.%d.%d.%d",
+                    ipInt and 0xFF,
+                    (ipInt shr 8) and 0xFF,
+                    (ipInt shr 16) and 0xFF,
+                    (ipInt shr 24) and 0xFF
+                )
+            }
+        } catch (e: Exception) { "0.0.0.0" }
     }
+
+    // ── Descubrimiento mDNS ───────────────────────────────────────────────────
 
     fun discoverPrinters(): Flow<PrinterInfo> = callbackFlow {
         val multicastLock = try {
-            wifiManager.createMulticastLock("EpsonPrintDiscovery").apply {
+            wifiManager.createMulticastLock("UniversalPrinterDiscovery").apply {
                 setReferenceCounted(true)
                 acquire()
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "No se pudo adquirir multicast lock: ${e.message}")
-            null
-        }
+        } catch (e: Exception) { null }
 
-        Log.d(TAG, "Iniciando descubrimiento mDNS para $SERVICE_TYPE_IPP")
-
-        // Lista de resolvers activos para evitar conflictos en NSD
         val activeResolvers = mutableSetOf<String>()
+        val discoveredIps   = mutableSetOf<String>()
+        val activeListeners = mutableListOf<NsdManager.DiscoveryListener>()
 
         val resolveListener = object : NsdManager.ResolveListener {
-            override fun onResolveFailed(serviceInfo: NsdServiceInfo?, errorCode: Int) {
-                Log.e(TAG, "Error al resolver servicio: $errorCode")
-                serviceInfo?.let { activeResolvers.remove(it.serviceName) }
+            override fun onResolveFailed(info: NsdServiceInfo?, errorCode: Int) {
+                info?.let { activeResolvers.remove(it.serviceName) }
             }
+            override fun onServiceResolved(info: NsdServiceInfo?) {
+                info ?: return
+                activeResolvers.remove(info.serviceName)
+                val ip = info.host?.hostAddress ?: return
+                if (ip.isEmpty() || ip == "0.0.0.0" || !discoveredIps.add(ip)) return
 
-            override fun onServiceResolved(serviceInfo: NsdServiceInfo?) {
-                serviceInfo?.let { info ->
-                    activeResolvers.remove(info.serviceName)
-                    Log.d(TAG, "Servicio resuelto: ${info.serviceName} → ${info.host?.hostAddress}:${info.port}")
-                    val ip = info.host?.hostAddress ?: return
-                    if (ip.isEmpty() || ip == "0.0.0.0") return
+                val port     = info.port.takeIf { it > 0 } ?: DEFAULT_IPP_PORT
+                val ippPath  = extractAttr(info.attributes, "rp")
+                    ?.let { if (it.startsWith("/")) it else "/$it" } ?: "/ipp/print"
+                val model    = extractModel(info.attributes) ?: info.serviceName
 
-                    val printerInfo = PrinterInfo(
-                        name      = info.serviceName,
-                        ipAddress = ip,
-                        ippPort   = info.port,
-                        ippPath   = extractIppPath(info.attributes) ?: "/ipp/print",
-                        esclPath  = "/eSCL",
-                        model     = extractModelFromAttributes(info.attributes)
-                    )
-                    trySend(printerInfo)
-                }
-            }
-        }
-
-        val discoveryListener = object : NsdManager.DiscoveryListener {
-            override fun onStartDiscoveryFailed(serviceType: String?, errorCode: Int) {
-                Log.e(TAG, "Fallo al iniciar descubrimiento: $errorCode")
-                close(Exception("Fallo NSD: $errorCode"))
-            }
-
-            override fun onStopDiscoveryFailed(serviceType: String?, errorCode: Int) {
-                Log.e(TAG, "Fallo al detener descubrimiento: $errorCode")
-            }
-
-            override fun onDiscoveryStarted(serviceType: String?) {
-                Log.d(TAG, "Descubrimiento iniciado para: $serviceType")
-            }
-
-            override fun onDiscoveryStopped(serviceType: String?) {
-                Log.d(TAG, "Descubrimiento detenido")
-            }
-
-            override fun onServiceFound(serviceInfo: NsdServiceInfo?) {
-                serviceInfo?.let { info ->
-                    Log.d(TAG, "Servicio encontrado: ${info.serviceName}")
-                    if (!activeResolvers.contains(info.serviceName)) {
-                        activeResolvers.add(info.serviceName)
-                        try {
-                            nsdManager.resolveService(info, resolveListener)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error al resolver ${info.serviceName}: ${e.message}")
-                            activeResolvers.remove(info.serviceName)
-                        }
-                    }
-                }
-            }
-
-            override fun onServiceLost(serviceInfo: NsdServiceInfo?) {
-                Log.d(TAG, "Servicio perdido: ${serviceInfo?.serviceName}")
-            }
-        }
-
-        try {
-            nsdManager.discoverServices(SERVICE_TYPE_IPP, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error al iniciar NSD: ${e.message}")
-            close(e)
-        }
-
-        awaitClose {
-            Log.d(TAG, "Deteniendo descubrimiento NSD")
-            try { nsdManager.stopServiceDiscovery(discoveryListener) } catch (_: Exception) {}
-            try { if (multicastLock?.isHeld == true) multicastLock.release() } catch (_: Exception) {}
-        }
-    }
-
-    fun scanNetworkForPrinters(): Flow<PrinterInfo> = flow {
-        val deviceIp = getDeviceIpAddress()
-        if (deviceIp == "0.0.0.0") {
-            Log.w(TAG, "No se pudo obtener IP del dispositivo para escaneo de red")
-            return@flow
-        }
-        val networkPrefix = deviceIp.substringBeforeLast(".")
-        Log.d(TAG, "Escaneando red $networkPrefix.1-254 en puerto $DEFAULT_IPP_PORT")
-
-        for (host in 1..254) {
-            val targetIp = "$networkPrefix.$host"
-            if (isIppPortOpen(targetIp, DEFAULT_IPP_PORT)) {
-                Log.d(TAG, "Puerto IPP abierto en: $targetIp")
-                emit(PrinterInfo(
-                    name      = "Impresora en $targetIp",
-                    ipAddress = targetIp,
-                    ippPort   = DEFAULT_IPP_PORT,
-                    ippPath   = "/ipp/print",
-                    esclPath  = "/eSCL",
-                    model     = null
+                Log.d(TAG, "mDNS: $model @ $ip:$port")
+                trySend(PrinterInfo(
+                    name          = model,
+                    ipAddress     = ip,
+                    ippPort       = port,
+                    ippPath       = ippPath,
+                    esclPath      = "/eSCL",
+                    model         = model,
+                    supportsIpp   = true,
+                    supportsEscl  = true,
+                    discoveredVia = "mDNS"
                 ))
             }
         }
-    }
 
-    private fun isIppPortOpen(ipAddress: String, port: Int): Boolean {
-        return try {
-            val socket = java.net.Socket()
-            socket.connect(java.net.InetSocketAddress(ipAddress, port), 500)
-            socket.close()
-            true
-        } catch (_: Exception) { false }
-    }
-
-    private fun extractModelFromAttributes(attributes: Map<String, ByteArray>?): String? {
-        if (attributes == null) return null
-        for (key in listOf("ty", "product", "usb_MDL", "model", "pdl")) {
-            attributes[key]?.let { return String(it, Charsets.UTF_8) }
+        SERVICE_TYPES.forEach { serviceType ->
+            val listener = object : NsdManager.DiscoveryListener {
+                override fun onStartDiscoveryFailed(st: String?, code: Int) {
+                    Log.w(TAG, "mDNS falló para $serviceType: $code")
+                }
+                override fun onStopDiscoveryFailed(st: String?, code: Int) {}
+                override fun onDiscoveryStarted(st: String?) {}
+                override fun onDiscoveryStopped(st: String?) {}
+                override fun onServiceFound(info: NsdServiceInfo?) {
+                    info ?: return
+                    if (activeResolvers.add(info.serviceName)) {
+                        try { nsdManager.resolveService(info, resolveListener) }
+                        catch (e: Exception) { activeResolvers.remove(info.serviceName) }
+                    }
+                }
+                override fun onServiceLost(info: NsdServiceInfo?) {}
+            }
+            try {
+                nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, listener)
+                activeListeners.add(listener)
+            } catch (e: Exception) {
+                Log.w(TAG, "No se pudo iniciar mDNS para $serviceType: ${e.message}")
+            }
         }
+
+        awaitClose {
+            activeListeners.forEach { runCatching { nsdManager.stopServiceDiscovery(it) } }
+            runCatching { if (multicastLock?.isHeld == true) multicastLock.release() }
+        }
+    }
+
+    // ── Escaneo TCP paralelo ──────────────────────────────────────────────────
+
+    /**
+     * Escanea toda la subred en paralelo.
+     * 254 hosts simultáneos ≈ 1-2 segundos (antes era secuencial: hasta 127s).
+     */
+    fun scanNetworkForPrinters(): Flow<PrinterInfo> = flow {
+        val deviceIp = getDeviceIpAddress()
+        if (deviceIp == "0.0.0.0") { Log.w(TAG, "IP no disponible"); return@flow }
+
+        val prefix = deviceIp.substringBeforeLast(".")
+        Log.d(TAG, "Escaneando $prefix.1-254 en paralelo...")
+
+        val channel = Channel<PrinterInfo>(Channel.BUFFERED)
+        val found   = mutableSetOf<String>()
+
+        withContext(Dispatchers.IO) {
+            coroutineScope {
+                (1..254).map { host ->
+                    async {
+                        val ip = "$prefix.$host"
+                        if (ip == deviceIp) return@async
+                        for (port in PRINTER_PORTS) {
+                            if (isPortOpen(ip, port)) {
+                                val model = tryGetModelViaHttp(ip)
+                                channel.trySend(PrinterInfo(
+                                    name          = model ?: "Impresora ($ip)",
+                                    ipAddress     = ip,
+                                    ippPort       = if (port == DEFAULT_IPP_PORT) port else DEFAULT_IPP_PORT,
+                                    ippPath       = "/ipp/print",
+                                    esclPath      = "/eSCL",
+                                    model         = model,
+                                    supportsIpp   = isPortOpen(ip, DEFAULT_IPP_PORT),
+                                    supportsEscl  = isPortOpen(ip, 80),
+                                    discoveredVia = "TCP (puerto $port)"
+                                ))
+                                break
+                            }
+                        }
+                    }
+                }.awaitAll()
+                channel.close()
+            }
+        }
+
+        for (info in channel) {
+            if (found.add(info.ipAddress)) {
+                Log.d(TAG, "TCP: ${info.displayName} @ ${info.ipAddress}")
+                emit(info)
+            }
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun isPortOpen(ip: String, port: Int): Boolean = try {
+        Socket().use { it.connect(InetSocketAddress(ip, port), AppConstants.SOCKET_TIMEOUT_MS); true }
+    } catch (_: Exception) { false }
+
+    private fun tryGetModelViaHttp(ip: String): String? = try {
+        val conn = java.net.URL("http://$ip/").openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 1000
+        conn.readTimeout    = 1000
+        conn.requestMethod  = "GET"
+        val title = extractHtmlTitle(conn.inputStream.bufferedReader().readText())
+        conn.disconnect()
+        title?.takeIf { it.isNotBlank() }
+    } catch (_: Exception) { null }
+
+    private fun extractHtmlTitle(html: String): String? =
+        Regex("<title[^>]*>([^<]+)</title>", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)?.trim()?.take(60)
+
+    private fun extractAttr(attrs: Map<String, ByteArray>?, vararg keys: String): String? {
+        if (attrs == null) return null
+        for (key in keys) attrs[key]?.let { return String(it, Charsets.UTF_8) }
         return null
     }
 
-    private fun extractIppPath(attributes: Map<String, ByteArray>?): String? {
-        if (attributes == null) return null
-        // Algunos dispositivos anuncian la ruta IPP en el atributo "rp"
-        attributes["rp"]?.let { return "/" + String(it, Charsets.UTF_8) }
-        return null
-    }
+    private fun extractModel(attrs: Map<String, ByteArray>?): String? =
+        extractAttr(attrs, "ty", "product", "usb_MDL", "model", "note")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+
 data class PrinterInfo(
-    val name:      String,
-    val ipAddress: String,
-    val ippPort:   Int    = 631,
-    val ippPath:   String = "/ipp/print",
-    val esclPath:  String = "/eSCL",
-    val model:     String? = null
+    val name:          String,
+    val ipAddress:     String,
+    val ippPort:       Int     = 631,
+    val ippPath:       String  = "/ipp/print",
+    val esclPath:      String  = "/eSCL",
+    val model:         String? = null,
+    val supportsIpp:   Boolean = true,
+    val supportsEscl:  Boolean = true,
+    val discoveredVia: String  = "mDNS"
 ) {
-    val ippUrl:   String get() = "http://$ipAddress:$ippPort$ippPath"
-    val esclUrl:  String get() = "http://$ipAddress$esclPath"
-    val snmpHost: String get() = ipAddress
+    val ippUrl:      String get() = "http://$ipAddress:$ippPort$ippPath"
+    val esclUrl:     String get() = "http://$ipAddress$esclPath"
+    val webUrl:      String get() = "http://$ipAddress/"
+    val displayName: String get() = model?.takeIf { it.isNotBlank() } ?: name
 }
