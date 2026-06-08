@@ -34,6 +34,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.epsonprintapp.scanner.ScannerCapabilities
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -136,30 +137,76 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
+                // Crear registro en BD si es nuevo escaneo
                 if (!appendToExisting) {
                     clearInternalState()
-                    currentJobId = database.scanJobDao().insertScanJob(ScanJobEntity(
-                        printerId  = printer.id,
-                        resolution = 300,
-                        colorMode  = if (_useColor.value == true) "COLOR" else "GRAYSCALE",
-                        paperSize  = "A4",
-                        status     = "PROCESSING"
-                    ))
+                    currentJobId = database.scanJobDao().insertScanJob(
+                        ScanJobEntity(
+                            printerId  = printer.id,
+                            resolution = 300,
+                            colorMode  = if (_useColor.value == true) "COLOR" else "GRAYSCALE",
+                            paperSize  = "A4",
+                            status     = "PROCESSING"
+                        )
+                    )
                 } else if (currentJobId < 0) {
-                    currentJobId = database.scanJobDao().insertScanJob(ScanJobEntity(
-                        printerId  = printer.id,
-                        resolution = 300,
-                        colorMode  = if (_useColor.value == true) "COLOR" else "GRAYSCALE",
-                        paperSize  = "A4",
-                        status     = "PROCESSING"
-                    ))
+                    currentJobId = database.scanJobDao().insertScanJob(
+                        ScanJobEntity(
+                            printerId  = printer.id,
+                            resolution = 300,
+                            colorMode  = if (_useColor.value == true) "COLOR" else "GRAYSCALE",
+                            paperSize  = "A4",
+                            status     = "PROCESSING"
+                        )
+                    )
                 }
 
-                val pageNum = pageFiles.size + 1
+                val pageNum   = pageFiles.size + 1
+                val ipAddress = printer.ipAddress
+
+                // ── Auto-descubrir el path eSCL ──────────────────────────────
+                // El path guardado en BD puede ser incorrecto (ej: /eSCL cuando
+                // la impresora no responde en ese path).
+                _statusMessage.postValue("🔎 Buscando endpoint eSCL en $ipAddress…")
+
+                val savedEsclUrl = printer.esclUrl  // ej: http://192.168.1.20/eSCL
+
+                // Verificar si el path guardado responde
+                var esclBaseUrl = savedEsclUrl
+                val caps        = esclClient.getScannerCapabilities(savedEsclUrl)
+
+                if (caps == null) {
+                    // No responde → buscar el path correcto probando puertos/paths
+                    _statusMessage.postValue("🔍 Buscando path eSCL alternativo…")
+                    val discovered = esclClient.discoverEsclPath(ipAddress)
+
+                    if (discovered != null) {
+                        esclBaseUrl = discovered
+                        // Extraer solo el path y guardarlo para próximas sesiones
+                        val newPath = discovered
+                            .removePrefix("http://$ipAddress")
+                            .removePrefix(":80")
+                            .removePrefix(":443")
+                            .ifEmpty { "/eSCL" }
+                        database.printerDao().updatePrinter(printer.copy(esclPath = newPath))
+                        Log.d(TAG, "✅ Path eSCL actualizado en BD: $newPath")
+                    } else {
+                        handleScanError(
+                            "No se encontró el servicio de escaneo en $ipAddress.\n\n" +
+                                    "Pasos para habilitarlo en el Epson L3560:\n" +
+                                    "1. Ve al panel de la impresora\n" +
+                                    "2. Configuración → Configuración de red → Avanzado\n" +
+                                    "3. Activa 'Escanear en red' o 'eSCL'\n" +
+                                    "4. Reinicia la impresora"
+                        )
+                        return@launch
+                    }
+                }
+
                 _statusMessage.postValue("🔍 Escaneando página $pageNum…")
 
                 val result = esclClient.scan(
-                    printer.esclUrl,
+                    esclBaseUrl,
                     ScanOptions(
                         resolution = 300,
                         colorMode  = if (_useColor.value == true) ScanColorMode.COLOR else ScanColorMode.GRAYSCALE,

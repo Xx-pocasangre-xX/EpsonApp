@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    menu_printer_item.xml
+    Menú contextual para cada impresora en la lista (PopupMenu).
+-->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:id="@+id/action_set_default"
+        android:title="⭐ Establecer como predeterminada"/>
+
+    <item
+        android:id="@+id/action_rename"
+        android:title="✏️ Renombrar"/>
+
+    <item
+        android:id="@+id/action_delete"
+        android:title="🗑️ Eliminar del registro"/>
+
+</menu>

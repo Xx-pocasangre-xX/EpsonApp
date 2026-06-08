@@ -21,8 +21,16 @@ interface PrinterDao {
     @Delete
     suspend fun deletePrinter(printer: PrinterEntity)
 
+    /** Flow para observar la lista completa en tiempo real (para RecyclerView). */
     @Query("SELECT * FROM printers ORDER BY isDefault DESC, lastSeen DESC")
     fun getAllPrinters(): Flow<List<PrinterEntity>>
+
+    /**
+     * Versión suspend (single-shot) para usar en coroutines sin Flow.
+     * Necesaria en PrinterRepository.deletePrinter() y checkAllPrinters().
+     */
+    @Query("SELECT * FROM printers ORDER BY isDefault DESC, lastSeen DESC")
+    suspend fun getAllPrintersOnce(): List<PrinterEntity>
 
     @Query("SELECT * FROM printers WHERE isDefault = 1 LIMIT 1")
     suspend fun getDefaultPrinter(): PrinterEntity?
@@ -40,7 +48,11 @@ interface PrinterDao {
     suspend fun setDefaultPrinter(id: Long)
 
     @Query("UPDATE printers SET isOnline = :isOnline, lastSeen = :timestamp WHERE id = :id")
-    suspend fun updatePrinterOnlineStatus(id: Long, isOnline: Boolean, timestamp: Long = System.currentTimeMillis())
+    suspend fun updatePrinterOnlineStatus(
+        id:        Long,
+        isOnline:  Boolean,
+        timestamp: Long = System.currentTimeMillis()
+    )
 
     @Query("SELECT COUNT(*) FROM printers")
     suspend fun getPrinterCount(): Int
@@ -126,7 +138,6 @@ interface NotificationDao {
     @Delete
     suspend fun deleteNotification(notification: NotificationEntity)
 
-    // FIX: add deleteById used by NotificationsViewModel
     @Query("DELETE FROM notifications WHERE id = :id")
     suspend fun deleteById(id: Long)
 
@@ -151,7 +162,6 @@ interface NotificationDao {
     @Query("DELETE FROM notifications WHERE createdAt < :cutoffTimestamp")
     suspend fun deleteOldNotifications(cutoffTimestamp: Long)
 
-    // FIX: rename deleteAllNotifications → clearAll so ViewModel compiles
     @Query("DELETE FROM notifications")
     suspend fun clearAll()
 

@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    menu_bottom_nav.xml
-    Menú del BottomNavigationView.
-    Los IDs deben coincidir con los IDs del nav_graph para que
-    setupWithNavController() funcione automáticamente.
+    menu_bottom_nav.xml — BottomNavigationView actualizado.
+
+    Ahora incluye 4 pestañas:
+    1. Inicio (Dashboard)
+    2. Imprimir
+    3. Escanear
+    4. Impresoras (nueva — gestión de múltiples impresoras)
+
+    Los IDs deben coincidir exactamente con los IDs del nav_graph para que
+    setupWithNavController() funcione correctamente.
 -->
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -21,5 +27,14 @@
         android:id="@+id/scanFragment"
         android:icon="@drawable/ic_scan"
         android:title="Escanear"/>
+
+    <!--
+        Nueva pestaña: Gestión de impresoras.
+        Usa ic_printer_list como ícono — puedes usar ic_print si no tienes ese drawable.
+    -->
+    <item
+        android:id="@+id/printersFragment"
+        android:icon="@drawable/ic_print"
+        android:title="Impresoras"/>
 
 </menu>

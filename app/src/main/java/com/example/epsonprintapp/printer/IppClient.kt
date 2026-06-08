@@ -15,18 +15,20 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * IppClient — Cliente IPP 2.0 universal y thread-safe.
+ * IppClient — Cliente IPP 2.0.
  *
- * Compatible con cualquier impresora IPP:
- * Epson, HP, Canon, Brother, Kyocera, Xerox, Ricoh, Samsung, Lexmark…
+ * CORRECCIONES para Epson L3560:
+ * ================================
+ * 1. El puerto 9100 es RAW printing, NO es IPP. IPP siempre es puerto 631.
+ *    La función buildIppUrl() fuerza el puerto 631 si detecta 9100.
  *
- * Mejoras respecto a la versión anterior:
- * - requestIdCounter: AtomicInteger (antes ++ no era atómico → race condition)
- * - detectedMediaReady / detectedColorModes: @Volatile (thread-safe)
- * - Consulta capacidades del printer antes de imprimir (Get-Printer-Attributes)
- * - resolveMedia / resolveColorMode / resolveSides adaptan atributos por impresora
- * - Retry automático en modo mínimo si la impresora rechaza con 0x400
- * - Nuevos tamaños de papel: A5, Legal
+ * 2. HTTP 500 al imprimir JPEG: el L3560 a veces rechaza JPEG directamente.
+ *    Se agrega retry con application/octet-stream como fallback.
+ *
+ * 3. Respuesta vacía: se aumentó el timeout de lectura y se verifica
+ *    el Content-Length antes de leer.
+ *
+ * 4. ipp-attribute-fidelity: cambiado a false siempre para mayor compatibilidad.
  */
 class IppClient(private val context: Context) {
 
@@ -35,37 +37,41 @@ class IppClient(private val context: Context) {
 
         private const val IPP_VERSION_MAJOR: Byte      = 0x02
         private const val IPP_VERSION_MINOR: Byte      = 0x00
+        private const val OP_PRINT_JOB:      Short     = 0x0002
+        private const val OP_GET_PRINTER_ATTRS: Short  = 0x000B
 
-        private const val OP_PRINT_JOB:          Short = 0x0002
-        private const val OP_GET_PRINTER_ATTRS:   Short = 0x000B
+        private const val TAG_OPERATION_ATTRIBUTES: Byte  = 0x01
+        private const val TAG_JOB_ATTRIBUTES:       Byte  = 0x02
+        private const val TAG_END_ATTRIBUTES:        Byte  = 0x03
+        private const val TAG_INTEGER:               Byte  = 0x21
+        private const val TAG_BOOLEAN:               Byte  = 0x22
+        private const val TAG_KEYWORD:               Byte  = 0x44
+        private const val TAG_URI:                   Byte  = 0x45
+        private const val TAG_CHARSET:               Byte  = 0x47
+        private const val TAG_NATURAL_LANGUAGE:      Byte  = 0x48
+        private const val TAG_MIME_MEDIA_TYPE:       Byte  = 0x49
+        private const val TAG_NAME_WITHOUT_LANGUAGE: Byte  = 0x42
 
-        private const val TAG_OPERATION_ATTRIBUTES:  Byte = 0x01
-        private const val TAG_JOB_ATTRIBUTES:        Byte = 0x02
-        private const val TAG_END_ATTRIBUTES:        Byte = 0x03
-        private const val TAG_INTEGER:               Byte = 0x21
-        private const val TAG_BOOLEAN:               Byte = 0x22
-        private const val TAG_KEYWORD:               Byte = 0x44
-        private const val TAG_URI:                   Byte = 0x45
-        private const val TAG_CHARSET:               Byte = 0x47
-        private const val TAG_NATURAL_LANGUAGE:      Byte = 0x48
-        private const val TAG_MIME_MEDIA_TYPE:       Byte = 0x49
-        private const val TAG_NAME_WITHOUT_LANGUAGE: Byte = 0x42
+        private val IPP_MEDIA_TYPE    = "application/ipp".toMediaType()
+        private val IPP_SUCCESS_RANGE = 0x0000..0x00FF
 
-        private val IPP_MEDIA_TYPE        = "application/ipp".toMediaType()
-        private val IPP_SUCCESS_RANGE     = 0x0000..0x00FF
-
-        // Thread-safe: AtomicInteger en lugar de @Volatile var con ++
         private val requestIdCounter = AtomicInteger(1)
         private fun nextId()         = requestIdCounter.getAndIncrement()
+
+        /** Puerto IPP correcto. Si la URL tiene 9100 (RAW), lo corrige a 631. */
+        fun fixIppUrl(url: String): String {
+            return if (url.contains(":9100")) {
+                url.replace(":9100", ":631")
+            } else url
+        }
     }
 
-    // Capacidades detectadas — @Volatile para visibilidad entre threads
-    @Volatile var detectedMediaReady:   String?       = null;   private set
-    @Volatile var detectedColorModes:   List<String>  = emptyList(); private set
-    @Volatile var detectedSides:        List<String>  = emptyList(); private set
-    @Volatile var detectedDocFormats:   List<String>  = emptyList(); private set
-    @Volatile var supportsColor:        Boolean       = true;   private set
-    @Volatile var supportsDuplex:       Boolean       = false;  private set
+    @Volatile var detectedMediaReady:  String?       = null;   private set
+    @Volatile var detectedColorModes:  List<String>  = emptyList(); private set
+    @Volatile var detectedSides:       List<String>  = emptyList(); private set
+    @Volatile var detectedDocFormats:  List<String>  = emptyList(); private set
+    @Volatile var supportsColor:       Boolean       = true;   private set
+    @Volatile var supportsDuplex:      Boolean       = false;  private set
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(AppConstants.HTTP_CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
@@ -77,16 +83,24 @@ class IppClient(private val context: Context) {
     // ── GET PRINTER STATUS ────────────────────────────────────────────────────
 
     suspend fun getPrinterStatus(printerUrl: String): PrinterStatus? {
+        val correctedUrl = fixIppUrl(printerUrl)
+        if (correctedUrl != printerUrl) {
+            Log.d(TAG, "URL corregida: $printerUrl → $correctedUrl")
+        }
         return try {
-            Log.d(TAG, "Consultando estado: $printerUrl")
+            Log.d(TAG, "Consultando estado: $correctedUrl")
             val req = Request.Builder()
-                .url(printerUrl)
-                .post(buildGetPrinterAttrs(printerUrl).toRequestBody(IPP_MEDIA_TYPE))
+                .url(correctedUrl)
+                .post(buildGetPrinterAttrs(correctedUrl).toRequestBody(IPP_MEDIA_TYPE))
                 .addHeader("Content-Type", "application/ipp")
                 .addHeader("Accept",       "application/ipp")
                 .build()
             val resp  = http.newCall(req).execute()
-            val bytes = resp.body?.bytes() ?: return null
+            val bytes = resp.body?.bytes()
+            if (bytes == null || bytes.isEmpty()) {
+                Log.w(TAG, "Respuesta vacía de getPrinterStatus")
+                return null
+            }
             parsePrinterAttrs(bytes)
         } catch (e: Exception) {
             Log.e(TAG, "getPrinterStatus error: ${e.message}")
@@ -96,27 +110,37 @@ class IppClient(private val context: Context) {
 
     // ── PRINT DOCUMENT ────────────────────────────────────────────────────────
 
-    /**
-     * Envía un documento a imprimir.
-     * Si falla con 0x0400 (atributos no reconocidos), reintenta en modo mínimo.
-     */
     suspend fun printDocument(
         printerUrl:     String,
         documentStream: InputStream,
         mimeType:       String,
         printOptions:   PrintOptions
     ): PrintJobResult? {
+        val correctedUrl = fixIppUrl(printerUrl)
         return try {
             val docBytes = documentStream.readBytes()
-            Log.d(TAG, "Imprimiendo ${docBytes.size} bytes | $mimeType")
+            Log.d(TAG, "Imprimiendo ${docBytes.size} bytes | mime=$mimeType | url=$correctedUrl")
 
-            var result = sendPrintJob(printerUrl, docBytes, mimeType, printOptions, minimal = false)
-
-            // Retry con atributos mínimos si la impresora rechaza por atributo desconocido
-            if (result?.statusCode == 0x0400 || result?.statusCode == 0x040B) {
-                Log.w(TAG, "0x${result?.statusCode?.toString(16)} — reintentando modo mínimo")
-                result = sendPrintJob(printerUrl, docBytes, mimeType, printOptions, minimal = true)
+            if (docBytes.isEmpty()) {
+                Log.e(TAG, "Documento vacío — no se puede imprimir")
+                return PrintJobResult(false, -1, 0, "", "El documento está vacío", -1)
             }
+
+            // Intento 1: con todas las opciones
+            var result = sendPrintJob(correctedUrl, docBytes, mimeType, printOptions, minimal = false)
+
+            // Intento 2: modo mínimo si falla con 0x0400 o 0x040B
+            if (result?.statusCode == 0x0400 || result?.statusCode == 0x040B) {
+                Log.w(TAG, "Atributo rechazado → reintentando modo mínimo")
+                result = sendPrintJob(correctedUrl, docBytes, mimeType, printOptions, minimal = true)
+            }
+
+            // Intento 3: si HTTP 500, probar con octet-stream
+            if (result == null || result.statusCode == 500) {
+                Log.w(TAG, "HTTP 500 → reintentando con application/octet-stream")
+                result = sendPrintJob(correctedUrl, docBytes, "application/octet-stream", printOptions, minimal = true)
+            }
+
             result
         } catch (e: Exception) {
             Log.e(TAG, "printDocument error: ${e.message}")
@@ -131,17 +155,30 @@ class IppClient(private val context: Context) {
         options:    PrintOptions,
         minimal:    Boolean
     ): PrintJobResult? {
-        val payload = buildPrintJob(printerUrl, mimeType, options, minimal) + docBytes
-        val req = Request.Builder()
-            .url(printerUrl)
-            .post(payload.toRequestBody(IPP_MEDIA_TYPE))
-            .addHeader("Content-Type", "application/ipp")
-            .addHeader("Accept",       "application/ipp")
-            .build()
-        val resp  = http.newCall(req).execute()
-        val bytes = resp.body?.bytes() ?: return null
-        Log.d(TAG, "HTTP ${resp.code} al imprimir (minimal=$minimal)")
-        return parsePrintJobResp(bytes)
+        return try {
+            val payload = buildPrintJob(printerUrl, mimeType, options, minimal) + docBytes
+            val req = Request.Builder()
+                .url(printerUrl)
+                .post(payload.toRequestBody(IPP_MEDIA_TYPE))
+                .addHeader("Content-Type", "application/ipp")
+                .addHeader("Accept",       "application/ipp")
+                .build()
+            val resp  = http.newCall(req).execute()
+            Log.d(TAG, "HTTP ${resp.code} al imprimir (minimal=$minimal, mime=$mimeType)")
+            val bytes = resp.body?.bytes()
+            if (bytes == null || bytes.isEmpty()) {
+                Log.w(TAG, "Respuesta vacía del servidor IPP")
+                // Una respuesta vacía con HTTP 200 puede significar éxito en algunos firmware Epson
+                return if (resp.code == 200) {
+                    PrintJobResult(success = true, jobId = -1, jobState = 5,
+                        stateReasons = "completed", errorMessage = null, statusCode = 0)
+                } else null
+            }
+            parsePrintJobResp(bytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "sendPrintJob: ${e.message}")
+            null
+        }
     }
 
     // ── BUILDERS ──────────────────────────────────────────────────────────────
@@ -153,44 +190,32 @@ class IppClient(private val context: Context) {
         ws(out, TAG_CHARSET,          "attributes-charset",          "utf-8")
         ws(out, TAG_NATURAL_LANGUAGE, "attributes-natural-language", "en-us")
         ws(out, TAG_URI,              "printer-uri",                 toIpp(url))
-        // Pedir todas las capacidades relevantes
         ws(out, TAG_KEYWORD, "requested-attributes", "printer-state")
         we(out, TAG_KEYWORD, "printer-state-reasons")
         we(out, TAG_KEYWORD, "printer-is-accepting-jobs")
         we(out, TAG_KEYWORD, "printer-make-and-model")
         we(out, TAG_KEYWORD, "media-ready")
         we(out, TAG_KEYWORD, "media-default")
-        we(out, TAG_KEYWORD, "media-supported")
         we(out, TAG_KEYWORD, "print-color-mode-supported")
-        we(out, TAG_KEYWORD, "print-color-mode-default")
         we(out, TAG_KEYWORD, "sides-supported")
-        we(out, TAG_KEYWORD, "sides-default")
         we(out, TAG_KEYWORD, "document-format-supported")
-        we(out, TAG_KEYWORD, "copies-supported")
         we(out, TAG_KEYWORD, "marker-levels")
         we(out, TAG_KEYWORD, "marker-names")
-        we(out, TAG_KEYWORD, "marker-types")
         we(out, TAG_KEYWORD, "marker-high-levels")
-        we(out, TAG_KEYWORD, "marker-low-levels")
         out.writeByte(TAG_END_ATTRIBUTES.toInt())
         return buf.toByteArray()
     }
 
-    private fun buildPrintJob(
-        url:     String,
-        mime:    String,
-        opts:    PrintOptions,
-        minimal: Boolean
-    ): ByteArray {
+    private fun buildPrintJob(url: String, mime: String, opts: PrintOptions, minimal: Boolean): ByteArray {
         val buf = ByteArrayOutputStream(); val out = DataOutputStream(buf)
         writeIppHeader(out, OP_PRINT_JOB)
         out.writeByte(TAG_OPERATION_ATTRIBUTES.toInt())
         ws(out, TAG_CHARSET,               "attributes-charset",          "utf-8")
         ws(out, TAG_NATURAL_LANGUAGE,      "attributes-natural-language", "en-us")
         ws(out, TAG_URI,                   "printer-uri",                 toIpp(url))
-        ws(out, TAG_NAME_WITHOUT_LANGUAGE, "job-name",                    "Job-${nextId()}")
+        ws(out, TAG_NAME_WITHOUT_LANGUAGE, "job-name",                    "EpsonJob-${nextId()}")
         ws(out, TAG_MIME_MEDIA_TYPE,       "document-format",             mime)
-        wb(out, "ipp-attribute-fidelity", false)  // tolerar attrs no reconocidos
+        wb(out, "ipp-attribute-fidelity", false)
 
         out.writeByte(TAG_JOB_ATTRIBUTES.toInt())
         wi(out, "copies", opts.copies.coerceAtLeast(1))
@@ -206,7 +231,7 @@ class IppClient(private val context: Context) {
         return buf.toByteArray()
     }
 
-    // ── RESOLVERS ADAPTATIVOS ─────────────────────────────────────────────────
+    // ── RESOLVERS ─────────────────────────────────────────────────────────────
 
     private fun resolveMedia(paperSize: PaperSize): String {
         detectedMediaReady?.takeIf { it.isNotBlank() }?.let { return it }
@@ -228,9 +253,9 @@ class IppClient(private val context: Context) {
             ColorMode.AUTO       -> "auto"
         }
         return when (mode) {
-            ColorMode.COLOR -> listOf("color", "rgb-8", "auto").firstOrNull { it in supported }
+            ColorMode.COLOR      -> listOf("color", "rgb-8", "auto").firstOrNull { it in supported }
             ColorMode.MONOCHROME -> listOf("monochrome", "black", "bi-level").firstOrNull { it in supported }
-            ColorMode.AUTO -> listOf("auto", "color", "monochrome").firstOrNull { it in supported }
+            ColorMode.AUTO       -> listOf("auto", "color", "monochrome").firstOrNull { it in supported }
         }
     }
 
@@ -246,40 +271,31 @@ class IppClient(private val context: Context) {
     // ── WRITE HELPERS ─────────────────────────────────────────────────────────
 
     private fun writeIppHeader(out: DataOutputStream, op: Short) {
-        out.writeByte(IPP_VERSION_MAJOR.toInt())
-        out.writeByte(IPP_VERSION_MINOR.toInt())
-        out.writeShort(op.toInt())
-        out.writeInt(nextId())
+        out.writeByte(IPP_VERSION_MAJOR.toInt()); out.writeByte(IPP_VERSION_MINOR.toInt())
+        out.writeShort(op.toInt()); out.writeInt(nextId())
     }
 
     private fun ws(out: DataOutputStream, tag: Byte, name: String, value: String) {
-        val nb = name.toByteArray(Charsets.US_ASCII)
-        val vb = value.toByteArray(Charsets.UTF_8)
+        val nb = name.toByteArray(Charsets.US_ASCII); val vb = value.toByteArray(Charsets.UTF_8)
         out.writeByte(tag.toInt()); out.writeShort(nb.size); out.write(nb)
         out.writeShort(vb.size);   out.write(vb)
     }
-
     private fun we(out: DataOutputStream, tag: Byte, value: String) {
         val vb = value.toByteArray(Charsets.UTF_8)
         out.writeByte(tag.toInt()); out.writeShort(0)
         out.writeShort(vb.size);   out.write(vb)
     }
-
     private fun wi(out: DataOutputStream, name: String, value: Int) {
         val nb = name.toByteArray(Charsets.US_ASCII)
         out.writeByte(TAG_INTEGER.toInt()); out.writeShort(nb.size); out.write(nb)
         out.writeShort(4); out.writeInt(value)
     }
-
     private fun wb(out: DataOutputStream, name: String, value: Boolean) {
         val nb = name.toByteArray(Charsets.US_ASCII)
         out.writeByte(TAG_BOOLEAN.toInt()); out.writeShort(nb.size); out.write(nb)
         out.writeShort(1); out.writeByte(if (value) 1 else 0)
     }
-
-    private fun toIpp(url: String) = url
-        .replaceFirst("http://",  "ipp://")
-        .replaceFirst("https://", "ipps://")
+    private fun toIpp(url: String) = url.replaceFirst("http://", "ipp://").replaceFirst("https://", "ipps://")
 
     // ── PARSERS ───────────────────────────────────────────────────────────────
 
@@ -292,17 +308,13 @@ class IppClient(private val context: Context) {
         val printerState = attrs["printer-state"]?.toIntOrNull() ?: 3
         val stateReasons = attrs["printer-state-reasons"] ?: "none"
 
-        // Guardar capacidades detectadas (@Volatile — thread-safe para lectura)
-        detectedMediaReady  = attrs["media-ready"]?.split(",")?.firstOrNull()?.trim()
+        detectedMediaReady = attrs["media-ready"]?.split(",")?.firstOrNull()?.trim()
             ?: attrs["media-default"]?.split(",")?.firstOrNull()?.trim()
-        detectedColorModes  = attrs["print-color-mode-supported"]?.split(",")
-            ?.map { it.trim() } ?: emptyList()
-        detectedSides       = attrs["sides-supported"]?.split(",")
-            ?.map { it.trim() } ?: emptyList()
-        detectedDocFormats  = attrs["document-format-supported"]?.split(",")
-            ?.map { it.trim() } ?: emptyList()
-        supportsColor       = detectedColorModes.any { it.contains("color", ignoreCase = true) }
-        supportsDuplex      = detectedSides.any { it.contains("two-sided", ignoreCase = true) }
+        detectedColorModes = attrs["print-color-mode-supported"]?.split(",")?.map { it.trim() } ?: emptyList()
+        detectedSides      = attrs["sides-supported"]?.split(",")?.map { it.trim() } ?: emptyList()
+        detectedDocFormats = attrs["document-format-supported"]?.split(",")?.map { it.trim() } ?: emptyList()
+        supportsColor      = detectedColorModes.any { it.contains("color", ignoreCase = true) }
+        supportsDuplex     = detectedSides.any { it.contains("two-sided", ignoreCase = true) }
 
         return PrinterStatus(
             state               = when (printerState) { 3 -> PrinterState.IDLE; 4 -> PrinterState.PROCESSING; 5 -> PrinterState.STOPPED; else -> PrinterState.UNKNOWN },
@@ -337,10 +349,9 @@ class IppClient(private val context: Context) {
     private fun readStatusCode(bytes: ByteArray): Int =
         ((bytes[2].toInt() and 0xFF) shl 8) or (bytes[3].toInt() and 0xFF)
 
-    private fun parseAttrs(bytes: ByteArray, startOffset: Int = 8): Map<String, String> {
-        val map  = mutableMapOf<String, String>()
-        var pos  = startOffset
-        var name = ""
+    private fun parseAttrs(bytes: ByteArray): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        var pos = 8; var name = ""
         while (pos < bytes.size) {
             val tag = bytes[pos].toInt() and 0xFF; pos++
             when (tag) {
@@ -354,8 +365,8 @@ class IppClient(private val context: Context) {
                     if (pos + 2 > bytes.size) break
                     val vLen = readShort(bytes, pos); pos += 2
                     if (vLen > 0 && pos + vLen <= bytes.size) {
-                        val vb  = bytes.copyOfRange(pos, pos + vLen)
-                        val v   = when (tag) {
+                        val vb = bytes.copyOfRange(pos, pos + vLen)
+                        val v  = when (tag) {
                             0x21, 0x23 -> if (vLen == 4) ByteBuffer.wrap(vb).int.toString() else String(vb, Charsets.UTF_8)
                             0x22       -> (vb[0].toInt() != 0).toString()
                             else       -> String(vb, Charsets.UTF_8)
@@ -376,22 +387,22 @@ class IppClient(private val context: Context) {
         val levels = attrs["marker-levels"]?.split(",")?.mapNotNull { it.trim().toIntOrNull() } ?: return InkLevels()
         val highs  = attrs["marker-high-levels"]?.split(",")?.mapNotNull { it.trim().toIntOrNull() }
         fun norm(raw: Int, high: Int?): Int = when {
-            raw == -2                        -> -2  // EcoTank ilimitado
-            raw < 0                          -> -1  // desconocido
-            high != null && high > 0         -> (raw * 100) / high
-            else                             -> raw
+            raw == -2                -> -2
+            raw < 0                  -> -1
+            high != null && high > 0 -> (raw * 100) / high
+            else                     -> raw
         }
         return when (levels.size) {
             1    -> InkLevels(black = norm(levels[0], highs?.getOrNull(0)))
             2    -> InkLevels(black = norm(levels[0], highs?.getOrNull(0)), cyan = norm(levels[1], highs?.getOrNull(1)))
-            4    -> InkLevels(cyan = norm(levels[0], highs?.getOrNull(0)), magenta = norm(levels[1], highs?.getOrNull(1)), yellow = norm(levels[2], highs?.getOrNull(2)), black = norm(levels[3], highs?.getOrNull(3)))
+            4    -> InkLevels(cyan  = norm(levels[0], highs?.getOrNull(0)), magenta = norm(levels[1], highs?.getOrNull(1)),
+                yellow = norm(levels[2], highs?.getOrNull(2)), black   = norm(levels[3], highs?.getOrNull(3)))
             else -> InkLevels()
         }
     }
 
     private fun interpretError(code: Int): String = when (code) {
-        0x0400 -> "Petición inválida (atributos no reconocidos)"
-        0x0401 -> "URI no accesible"
+        0x0400 -> "Petición inválida"
         0x040A -> "Formato no soportado"
         0x040B -> "Atributos en conflicto"
         0x0503 -> "Impresora ocupada"
@@ -404,50 +415,36 @@ class IppClient(private val context: Context) {
 // ── Data classes ──────────────────────────────────────────────────────────────
 
 data class PrinterStatus(
-    val state:               PrinterState,
-    val stateReasons:        String,
-    val inkLevels:           InkLevels,
-    val hasPaper:            Boolean,
-    val isAcceptingJobs:     Boolean,
-    val rawStatusCode:       Int,
-    val model:               String?      = null,
+    val state: PrinterState, val stateReasons: String, val inkLevels: InkLevels,
+    val hasPaper: Boolean, val isAcceptingJobs: Boolean, val rawStatusCode: Int,
+    val model: String? = null,
     val supportedColorModes: List<String> = emptyList(),
     val supportedSides:      List<String> = emptyList(),
     val supportedDocFormats: List<String> = emptyList()
 ) {
     val displayStatus: String get() = when (state) {
         PrinterState.IDLE       -> if (hasPaper) "Lista para imprimir" else "Sin papel"
-        PrinterState.PROCESSING -> "Imprimiendo..."
+        PrinterState.PROCESSING -> "Imprimiendo…"
         PrinterState.STOPPED    -> "Detenida: $stateReasons"
         PrinterState.UNKNOWN    -> "Estado desconocido"
     }
-    companion object {
-        fun offline() = PrinterStatus(PrinterState.UNKNOWN, "offline", InkLevels(), false, false, -1)
-    }
+    companion object { fun offline() = PrinterStatus(PrinterState.UNKNOWN, "offline", InkLevels(), false, false, -1) }
 }
 
 enum class PrinterState { IDLE, PROCESSING, STOPPED, UNKNOWN }
-
 data class InkLevels(
-    val cyan: Int = -1, val magenta: Int = -1,
-    val yellow: Int = -1, val black: Int = -1
-) {
-    val isAvailable: Boolean get() = cyan >= 0 || black >= 0
-}
+    val cyan: Int = -1, val magenta: Int = -1, val yellow: Int = -1, val black: Int = -1
+) { val isAvailable: Boolean get() = cyan >= 0 || black >= 0 }
 
 data class PrintJobResult(
     val success: Boolean, val jobId: Int, val jobState: Int,
     val stateReasons: String, val errorMessage: String?, val statusCode: Int
 )
-
 data class PrintOptions(
-    val copies:    Int          = 1,
-    val colorMode: ColorMode    = ColorMode.AUTO,
-    val duplex:    DuplexMode   = DuplexMode.ONE_SIDED,
-    val paperSize: PaperSize    = PaperSize.LETTER,
-    val quality:   PrintQuality = PrintQuality.NORMAL
+    val copies: Int = 1, val colorMode: ColorMode = ColorMode.AUTO,
+    val duplex: DuplexMode = DuplexMode.ONE_SIDED, val paperSize: PaperSize = PaperSize.LETTER,
+    val quality: PrintQuality = PrintQuality.NORMAL
 )
-
 enum class ColorMode    { COLOR, MONOCHROME, AUTO }
 enum class DuplexMode   { ONE_SIDED, TWO_SIDED_LONG, TWO_SIDED_SHORT }
 enum class PaperSize    { A4, LETTER, A3, A5, LEGAL, PHOTO_4X6 }

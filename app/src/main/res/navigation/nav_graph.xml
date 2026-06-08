@@ -1,17 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    nav_graph.xml — Grafo de navegación de la aplicación.
+    nav_graph.xml — Grafo de navegación actualizado.
 
-    Fragmentos y sus conexiones:
-    ┌─────────────────────────────────────────────────────────┐
-    │  DashboardFragment (inicio)                             │
-    │    ├──▶ PrintFragment       (botón Imprimir)            │
-    │    ├──▶ ScanFragment        (botón Escanear)            │
-    │    └──▶ NotificationsFragment (botón Notificaciones)    │
-    └─────────────────────────────────────────────────────────┘
+    Nuevos destinos:
+    - printersFragment: Gestión de múltiples impresoras (nueva pantalla)
 
-    PrintFragment y ScanFragment también son accesibles desde
-    el BottomNavigationView (destinos top-level).
+    La BottomNav ahora incluye "Impresoras" como pestaña de nivel superior.
+
+    Árbol:
+    ┌────────────────────────────────────────────────────────────┐
+    │  Dashboard (inicio)                                        │
+    │    ├──▶ PrintFragment       (botón Imprimir)               │
+    │    ├──▶ ScanFragment        (botón Escanear)               │
+    │    └──▶ NotificationsFragment (botón Notificaciones)       │
+    │  PrintersFragment (pestaña nueva en BottomNav)             │
+    └────────────────────────────────────────────────────────────┘
 -->
 <navigation
     xmlns:android="http://schemas.android.com/apk/res/android"
@@ -20,14 +23,13 @@
     android:id="@+id/nav_graph"
     app:startDestination="@id/dashboardFragment">
 
-    <!-- ── Dashboard (pantalla inicial) ────────────────────────────────────── -->
+    <!-- ── Dashboard ───────────────────────────────────────────────────────── -->
     <fragment
         android:id="@+id/dashboardFragment"
         android:name="com.example.epsonprintapp.ui.dashboard.DashboardFragment"
         android:label="EpsonPrint"
         tools:layout="@layout/fragment_dashboard">
 
-        <!-- Navegar a Imprimir -->
         <action
             android:id="@+id/action_dashboard_to_print"
             app:destination="@id/printFragment"
@@ -36,7 +38,6 @@
             app:popEnterAnim="@anim/slide_in_left"
             app:popExitAnim="@anim/slide_out_right"/>
 
-        <!-- Navegar a Escanear -->
         <action
             android:id="@+id/action_dashboard_to_scan"
             app:destination="@id/scanFragment"
@@ -45,7 +46,6 @@
             app:popEnterAnim="@anim/slide_in_left"
             app:popExitAnim="@anim/slide_out_right"/>
 
-        <!-- Navegar a Notificaciones -->
         <action
             android:id="@+id/action_dashboard_to_notifications"
             app:destination="@id/notificationsFragment"
@@ -54,23 +54,39 @@
             app:popEnterAnim="@anim/slide_in_left"
             app:popExitAnim="@anim/slide_out_right"/>
 
+        <!-- Navegar a la pantalla de impresoras desde el Dashboard -->
+        <action
+            android:id="@+id/action_dashboard_to_printers"
+            app:destination="@id/printersFragment"
+            app:enterAnim="@anim/slide_in_right"
+            app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left"
+            app:popExitAnim="@anim/slide_out_right"/>
+
     </fragment>
 
-    <!-- ── Pantalla de impresión ────────────────────────────────────────────── -->
+    <!-- ── Impresoras (nueva pantalla de gestión) ───────────────────────────── -->
+    <fragment
+        android:id="@+id/printersFragment"
+        android:name="com.example.epsonprintapp.ui.printers.PrintersFragment"
+        android:label="Impresoras"
+        tools:layout="@layout/fragment_printers"/>
+
+    <!-- ── Impresión ────────────────────────────────────────────────────────── -->
     <fragment
         android:id="@+id/printFragment"
         android:name="com.example.epsonprintapp.ui.print.PrintFragment"
         android:label="Imprimir"
         tools:layout="@layout/fragment_print"/>
 
-    <!-- ── Pantalla de escaneo ──────────────────────────────────────────────── -->
+    <!-- ── Escaneo ──────────────────────────────────────────────────────────── -->
     <fragment
         android:id="@+id/scanFragment"
         android:name="com.example.epsonprintapp.ui.scan.ScanFragment"
         android:label="Escanear"
         tools:layout="@layout/fragment_scan"/>
 
-    <!-- ── Pantalla de notificaciones ──────────────────────────────────────── -->
+    <!-- ── Notificaciones ───────────────────────────────────────────────────── -->
     <fragment
         android:id="@+id/notificationsFragment"
         android:name="com.example.epsonprintapp.ui.notifications.NotificationsFragment"
