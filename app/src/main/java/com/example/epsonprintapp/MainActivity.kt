@@ -11,14 +11,15 @@ import androidx.core.app.ActivityCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavController
 import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.AppBarConfiguration
 import androidx.navigation.ui.navigateUp
 import androidx.navigation.ui.setupActionBarWithNavController
 import androidx.navigation.ui.setupWithNavController
-import com.example.epsonprintapp.database.AppDatabase
 import com.example.epsonprintapp.util.PermissionHelper
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.snackbar.Snackbar
@@ -205,19 +206,24 @@ class MainActivity : AppCompatActivity() {
     // ── Badge notificaciones ──────────────────────────────────────────────────
 
     private fun observeUnreadNotifications(bottomNav: BottomNavigationView) {
+        // repeatOnLifecycle: la colección del Flow infinito de Room se detiene
+        // cuando la Activity pasa a background y se reanuda al volver —
+        // sin queries re-ejecutándose con la app invisible.
         lifecycleScope.launch {
-            AppDatabase.getInstance(this@MainActivity)
-                .notificationDao()
-                .getUnreadCount()
-                .collect { count ->
-                    val badge = bottomNav.getOrCreateBadge(R.id.dashboardFragment)
-                    if (count > 0) {
-                        badge.isVisible = true
-                        badge.number    = count
-                    } else {
-                        badge.isVisible = false
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                appContainer.database
+                    .notificationDao()
+                    .getUnreadCount()
+                    .collect { count ->
+                        val badge = bottomNav.getOrCreateBadge(R.id.dashboardFragment)
+                        if (count > 0) {
+                            badge.isVisible = true
+                            badge.number    = count
+                        } else {
+                            badge.isVisible = false
+                        }
                     }
-                }
+            }
         }
     }
 

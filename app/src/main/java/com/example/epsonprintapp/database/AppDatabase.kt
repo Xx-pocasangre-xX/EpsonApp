@@ -4,8 +4,6 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.TypeConverter
-import androidx.room.TypeConverters
 import com.example.epsonprintapp.AppConstants
 import com.example.epsonprintapp.database.dao.NotificationDao
 import com.example.epsonprintapp.database.dao.PrintJobDao
@@ -15,7 +13,6 @@ import com.example.epsonprintapp.database.entities.NotificationEntity
 import com.example.epsonprintapp.database.entities.PrintJobEntity
 import com.example.epsonprintapp.database.entities.PrinterEntity
 import com.example.epsonprintapp.database.entities.ScanJobEntity
-import java.util.Date
 
 /**
  * AppDatabase — Base de datos principal Room.
@@ -36,18 +33,12 @@ import java.util.Date
     version = 1,
     exportSchema = true
 )
-@TypeConverters(AppDatabase.Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun printerDao():      PrinterDao
     abstract fun printJobDao():     PrintJobDao
     abstract fun scanJobDao():      ScanJobDao
     abstract fun notificationDao(): NotificationDao
-
-    class Converters {
-        @TypeConverter fun fromTimestamp(value: Long?): Date? = value?.let { Date(it) }
-        @TypeConverter fun dateToTimestamp(date: Date?): Long? = date?.time
-    }
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null

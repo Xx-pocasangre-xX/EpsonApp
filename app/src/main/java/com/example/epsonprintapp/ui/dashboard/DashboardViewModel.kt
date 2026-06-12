@@ -8,12 +8,9 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.asLiveData
 import androidx.lifecycle.viewModelScope
 import com.example.epsonprintapp.AppConstants
-import com.example.epsonprintapp.database.AppDatabase
+import com.example.epsonprintapp.appContainer
 import com.example.epsonprintapp.database.entities.PrinterEntity
-import com.example.epsonprintapp.network.PrinterDiscovery
 import com.example.epsonprintapp.network.PrinterInfo
-import com.example.epsonprintapp.notifications.AppNotificationManager
-import com.example.epsonprintapp.printer.IppClient
 import com.example.epsonprintapp.printer.InkLevels
 import com.example.epsonprintapp.printer.PrinterStatus
 import kotlinx.coroutines.Dispatchers
@@ -27,19 +24,18 @@ import kotlinx.coroutines.withTimeout
 /**
  * DashboardViewModel
  *
- * CAMBIOS CLAVE:
  * - SIN IP hardcodeada — todo viene de mDNS o TCP scan
- * - SIN refresh periódico automático (eliminado — causaba timeouts)
- * - Al guardar impresoras, siempre ippPort=631 (nunca 9100)
- * - Al mostrar la impresora, corrige URLs con puerto 9100 automáticamente
- * - cleanStaleEntries(): elimina impresoras con IPs que ya no están en la red actual
+ * - Toda la persistencia pasa por PrinterRepository (única fuente de verdad)
+ * - Las impresoras de otras redes se marcan offline, NUNCA se borran
+ * - Las dependencias vienen de AppContainer (compartidas con el resto de la app)
  */
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val database            = AppDatabase.getInstance(application)
-    private val printerDiscovery    = PrinterDiscovery(application)
-    private val ippClient           = IppClient(application)
-    private val notificationManager = AppNotificationManager(application)
+    private val container           = application.appContainer
+    private val repository          = container.printerRepository
+    private val database            = container.database
+    private val printerDiscovery    = container.printerDiscovery
+    private val notificationManager = container.notificationManager
 
     // ── LiveData ───────────────────────────────────────────────────────────────
 
@@ -72,7 +68,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         database.notificationDao().getUnreadCount().asLiveData()
 
     val savedPrinters: LiveData<List<PrinterEntity>> =
-        database.printerDao().getAllPrinters().asLiveData()
+        repository.getAllPrinters().asLiveData()
 
     private var refreshJob: Job? = null
 
@@ -84,6 +80,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     // ── Red y carga inicial ───────────────────────────────────────────────────
 
     private fun checkNetworkAndLoadPrinter() {
+        // Dispatchers.IO: getDeviceIpAddress() enumera interfaces de red (I/O ligero)
         viewModelScope.launch(Dispatchers.IO) {
             val hasNetwork = printerDiscovery.isNetworkAvailable()
             val hasLocal   = printerDiscovery.isLocalNetworkAvailable()
@@ -99,12 +96,11 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
             Log.d(TAG, "Red local: $hasLocal | IP: $deviceIp | Prefijo: $prefix")
 
-            // Limpiar impresoras de redes anteriores (IPs de otro prefijo)
-            if (prefix != null) cleanStaleEntries(prefix)
+            // Impresoras de redes anteriores → offline (sin borrar datos del usuario)
+            if (prefix != null) repository.markStalePrintersOffline(prefix)
 
-            val defaultPrinter = database.printerDao().getDefaultPrinter()
+            val defaultPrinter = repository.getDefaultPrinter()
             if (defaultPrinter != null) {
-                // Verificar que la IP guardada pertenece a la red actual
                 val savedPrefix = defaultPrinter.ipAddress.substringBeforeLast(".")
                 if (prefix != null && savedPrefix != prefix) {
                     Log.w(TAG, "Impresora guardada ($savedPrefix.x) no es de la red actual ($prefix.x) — re-descubriendo")
@@ -121,25 +117,8 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /**
-     * Elimina de la BD las impresoras cuyo prefijo de red no coincide
-     * con el prefijo de red actual. Esto evita que aparezcan impresoras
-     * de redes WiFi anteriores (ej: trabajo vs casa).
-     */
-    private suspend fun cleanStaleEntries(currentPrefix: String) {
-        val all = database.printerDao().getAllPrintersOnce()
-        val stale = all.filter { printer ->
-            val printerPrefix = printer.ipAddress.substringBeforeLast(".")
-            printerPrefix != currentPrefix
-        }
-        if (stale.isNotEmpty()) {
-            Log.d(TAG, "Eliminando ${stale.size} impresoras de redes anteriores")
-            stale.forEach { database.printerDao().deletePrinter(it) }
-        }
-    }
-
     private fun scheduleDbCleanup() {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             runCatching {
                 val cutoff = System.currentTimeMillis() -
                         AppConstants.DB_OLD_JOBS_DAYS * 24 * 60 * 60 * 1000L
@@ -173,7 +152,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             val seenIps = mutableSetOf<String>()
             var count   = 0
 
-            // Fase 1: mDNS (obtiene path IPP real)
+            // Fase 1: mDNS (obtiene el path IPP real de la impresora)
             try {
                 withTimeout(AppConstants.DISCOVERY_TIMEOUT_MS) {
                     printerDiscovery.discoverPrinters()
@@ -217,7 +196,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                     "No se encontraron impresoras.\n" +
                             "• Verifica que la impresora esté encendida\n" +
                             "• Confirma que el teléfono y la impresora están en la misma red WiFi\n" +
-                            "• Ve a 'Impresoras' → '+ Agregar IP' e ingresa: 192.168.1.20"
+                            "• Ve a 'Impresoras' → '+ Agregar IP' e ingresa la IP de tu impresora"
                 )
             } else {
                 _discoveryProgress.postValue("✅ ${found.size} impresora(s) encontrada(s)")
@@ -230,30 +209,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private suspend fun handleDiscoveredPrinter(printer: PrinterInfo) {
-        val dao      = database.printerDao()
-        val existing = dao.getPrinterByIp(printer.ipAddress)
-        val isFirst  = dao.getPrinterCount() == 0
-
-        // NUNCA guardar puerto 9100 como ippPort
-        val safeIppPort = if (printer.ippPort == 9100 || printer.ippPort == 0) 631 else printer.ippPort
-
-        val entity = PrinterEntity(
-            id        = existing?.id ?: 0L,
-            name      = printer.displayName,
-            ipAddress = printer.ipAddress,
-            ippPort   = safeIppPort,
-            ippPath   = printer.ippPath,
-            esclPath  = printer.esclPath,
-            model     = printer.model,
-            isDefault = isFirst || (existing?.isDefault == true),
-            isOnline  = true,
-            lastSeen  = System.currentTimeMillis()
-        )
-        val savedId = dao.insertPrinter(entity)
-        Log.d(TAG, "Guardada: ${printer.displayName} @ ${printer.ipAddress}:$safeIppPort${printer.ippPath}")
-
-        if (_currentPrinter.value == null || isFirst) {
-            val saved = dao.getPrinterById(savedId)
+        val savedId = repository.saveDiscoveredPrinter(printer)
+        if (_currentPrinter.value == null) {
+            val saved = repository.getPrinterById(savedId)
             _currentPrinter.postValue(saved)
             saved?.let { refreshPrinterStatus(it) }
         }
@@ -264,32 +222,21 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     fun refreshPrinterStatus(printer: PrinterEntity? = _currentPrinter.value) {
         if (printer == null) return
         refreshJob?.cancel()
-        refreshJob = viewModelScope.launch(Dispatchers.IO) {
-            _isLoading.postValue(true)
+        // Sin Dispatchers.IO: repository.checkPrinterStatus es main-safe
+        refreshJob = viewModelScope.launch {
+            _isLoading.value = true
             try {
-                // Construir URL correcta (nunca puerto 9100)
-                val ippPort  = if (printer.ippPort == 9100 || printer.ippPort == 0) 631 else printer.ippPort
-                val ippUrl   = "http://${printer.ipAddress}:$ippPort${printer.ippPath}"
-
-                val status = ippClient.getPrinterStatus(ippUrl)
+                val status = repository.checkPrinterStatus(printer)
+                _printerStatus.value = status
                 if (status != null) {
-                    _printerStatus.postValue(status)
-                    database.printerDao().updatePrinterOnlineStatus(printer.id, true)
-                    // Actualizar ippPort en BD si era incorrecto
-                    if (printer.ippPort != ippPort) {
-                        database.printerDao().updatePrinter(printer.copy(ippPort = ippPort))
-                    }
                     checkInkLevels(status.inkLevels)
                     if (!status.hasPaper) notificationManager.notifyNoPaper()
-                } else {
-                    _printerStatus.postValue(null)
-                    database.printerDao().updatePrinterOnlineStatus(printer.id, false)
                 }
             } catch (e: Exception) {
-                _printerStatus.postValue(null)
-                _errorMessage.postValue("No se pudo conectar con ${printer.name}: ${e.message}")
+                _printerStatus.value = null
+                _errorMessage.value  = "No se pudo conectar con ${printer.name}: ${e.message}"
             } finally {
-                _isLoading.postValue(false)
+                _isLoading.value = false
             }
         }
     }
@@ -303,11 +250,10 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun selectPrinter(printerId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            database.printerDao().clearDefaultPrinter()
-            database.printerDao().setDefaultPrinter(printerId)
-            val printer = database.printerDao().getPrinterById(printerId)
-            _currentPrinter.postValue(printer)
+        viewModelScope.launch {
+            repository.setDefault(printerId)
+            val printer = repository.getPrinterById(printerId)
+            _currentPrinter.value = printer
             printer?.let { refreshPrinterStatus(it) }
         }
     }
@@ -317,7 +263,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         refreshJob?.cancel()
-        notificationManager.cancel()
+        // notificationManager es compartido a nivel app: NO se cancela aquí
     }
 
     companion object { private const val TAG = "DashboardVM" }

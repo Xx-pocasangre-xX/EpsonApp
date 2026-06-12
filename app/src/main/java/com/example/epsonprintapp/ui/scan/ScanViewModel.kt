@@ -2,7 +2,6 @@ package com.example.epsonprintapp.ui.scan
 
 import android.app.Application
 import android.content.ContentValues
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -19,10 +18,8 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.example.epsonprintapp.AppConstants
-import com.example.epsonprintapp.database.AppDatabase
+import com.example.epsonprintapp.appContainer
 import com.example.epsonprintapp.database.entities.ScanJobEntity
-import com.example.epsonprintapp.notifications.AppNotificationManager
-import com.example.epsonprintapp.scanner.EsclClient
 import com.example.epsonprintapp.scanner.ScanColorMode
 import com.example.epsonprintapp.scanner.ScanFormat
 import com.example.epsonprintapp.scanner.ScanIntent
@@ -31,10 +28,8 @@ import com.example.epsonprintapp.scanner.ScanPaperSize
 import com.example.epsonprintapp.scanner.ScanResult
 import com.example.epsonprintapp.scanner.ScanSource
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.example.epsonprintapp.scanner.ScannerCapabilities
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -42,25 +37,32 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * ScanViewModel — Escaneo con almacenamiento en DISCO (no en RAM).
+ * ScanViewModel — Escaneo eSCL con almacenamiento en DISCO (no en RAM).
  *
- * Problema anterior: guardaba bitmaps completos en RAM.
- * A 300 DPI, cada página A4 ocupa ~25 MB. Con 10 páginas → OutOfMemoryError.
+ * Memoria: los bytes RAW del escáner van a archivos temporales en cache.
+ * En RAM solo viven miniaturas RGB_565 de 300 px (~150 KB cada una).
+ * Las miniaturas NO se reciclan manualmente: son pequeñas y el GC las
+ * gestiona. (El recycle() manual con delay() que había antes era una
+ * condición de carrera: podía reciclar un bitmap mientras el RecyclerView
+ * lo dibujaba → crash "trying to use a recycled bitmap".)
  *
- * Solución: los bytes RAW del escáner se guardan en archivos temporales en disco.
- * En RAM solo viven miniaturas de 300px (~150 KB cada una).
- * Capacidad práctica: 100+ páginas sin problemas.
+ * Concurrencia: pageFiles y thumbnailList SOLO se mutan desde el hilo Main
+ * (viewModelScope sin dispatcher). El trabajo pesado (red, disco, decode)
+ * se aísla en Dispatchers.IO con withContext, pero las listas nunca se
+ * tocan desde ahí. Así no hay carreras entre escanear/borrar/guardar.
  *
- * PDF: usa android.graphics.pdf.PdfDocument (API nativa Android, sin dependencias
- * externas, sin problema de licencia AGPL). Procesa una página a la vez del disco.
+ * PDF: usa android.graphics.pdf.PdfDocument (API nativa, sin licencias AGPL),
+ * procesando una página a la vez desde disco.
  */
 class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object { private const val TAG = "ScanViewModel" }
 
-    private val database            = AppDatabase.getInstance(application)
-    private val esclClient          = EsclClient()
-    private val notificationManager = AppNotificationManager(application)
+    private val container           = application.appContainer
+    private val database            = container.database
+    private val repository          = container.printerRepository
+    private val esclClient          = container.esclClient
+    private val notificationManager = container.notificationManager
 
     // ── LiveData ───────────────────────────────────────────────────────────────
 
@@ -85,37 +87,37 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     private val _hasScannedData    = MutableLiveData(false)
     val hasScannedData: LiveData<Boolean> = _hasScannedData
 
-    val isSaveSuccess  = MutableLiveData(false)
-    val errorMessage   = MutableLiveData<String?>()
+    private val _isSaveSuccess     = MutableLiveData(false)
+    val isSaveSuccess: LiveData<Boolean> = _isSaveSuccess
 
     private val _useColor          = MutableLiveData(true)
     val useColor: LiveData<Boolean> = _useColor
 
-    // ── Estado interno ────────────────────────────────────────────────────────
+    // ── Estado interno (SOLO se muta desde el hilo Main) ──────────────────────
 
     /** Rutas a archivos JPEG temporales en disco — no bitmaps en RAM */
-    private val pageFiles      = mutableListOf<File>()
+    private val pageFiles     = mutableListOf<File>()
     /** Miniaturas pequeñas en RAM (~150 KB cada una) */
-    private val thumbnailList  = mutableListOf<Bitmap>()
+    private val thumbnailList = mutableListOf<Bitmap>()
 
-    // @Volatile: leído/escrito desde Dispatchers.IO y Main
-    @Volatile private var currentJobId: Long = -1
-    private var scanDir: File? = null
+    private var currentJobId: Long = -1
+
+    /** Directorio de temporales. lazy sincronizado; mkdirs() es barato. */
+    private val scanDir: File by lazy {
+        File(getApplication<Application>().cacheDir, AppConstants.SCAN_TEMP_DIR)
+            .apply { mkdirs() }
+    }
 
     // ── Init ──────────────────────────────────────────────────────────────────
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {
-            scanDir = File(getApplication<Application>().cacheDir, AppConstants.SCAN_TEMP_DIR)
-                .also { if (!it.exists()) it.mkdirs() }
-            cleanOldTempFiles()
-        }
+        viewModelScope.launch(Dispatchers.IO) { cleanOldTempFiles() }
     }
 
     private fun cleanOldTempFiles() {
         try {
             val maxAgeMs = AppConstants.SCAN_TEMP_MAX_AGE_H * 3_600_000L
-            scanDir?.listFiles()?.forEach { file ->
+            scanDir.listFiles()?.forEach { file ->
                 if (System.currentTimeMillis() - file.lastModified() > maxAgeMs) {
                     file.delete()
                     Log.d(TAG, "Temporal antiguo eliminado: ${file.name}")
@@ -129,27 +131,19 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     fun startScan(appendToExisting: Boolean = false) {
         if (_isScanning.value == true) return
 
-        viewModelScope.launch(Dispatchers.IO) {
-            _isScanning.postValue(true)
+        // Main: las listas y LiveData se tocan aquí; la red/disco va a IO adentro
+        viewModelScope.launch {
+            _isScanning.value = true
             try {
-                val printer = database.printerDao().getDefaultPrinter() ?: run {
-                    _statusMessage.postValue("❌ No hay impresora configurada. Ve al Dashboard.")
+                val printer = repository.getDefaultPrinter() ?: run {
+                    _statusMessage.value = "❌ No hay impresora configurada. Ve al Dashboard."
                     return@launch
                 }
 
-                // Crear registro en BD si es nuevo escaneo
-                if (!appendToExisting) {
-                    clearInternalState()
-                    currentJobId = database.scanJobDao().insertScanJob(
-                        ScanJobEntity(
-                            printerId  = printer.id,
-                            resolution = 300,
-                            colorMode  = if (_useColor.value == true) "COLOR" else "GRAYSCALE",
-                            paperSize  = "A4",
-                            status     = "PROCESSING"
-                        )
-                    )
-                } else if (currentJobId < 0) {
+                if (!appendToExisting) clearInternalState()
+
+                // Crear registro en BD si no hay trabajo activo
+                if (currentJobId < 0) {
                     currentJobId = database.scanJobDao().insertScanJob(
                         ScanJobEntity(
                             printerId  = printer.id,
@@ -164,31 +158,27 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 val pageNum   = pageFiles.size + 1
                 val ipAddress = printer.ipAddress
 
-                // ── Auto-descubrir el path eSCL ──────────────────────────────
-                // El path guardado en BD puede ser incorrecto (ej: /eSCL cuando
-                // la impresora no responde en ese path).
-                _statusMessage.postValue("🔎 Buscando endpoint eSCL en $ipAddress…")
+                // ── Verificar/redescubrir el endpoint eSCL ───────────────────
+                // En la L3560 el path correcto es http://<ip>/eSCL (puerto 80),
+                // pero el guardado en BD puede estar desactualizado.
+                _statusMessage.value = "🔎 Verificando escáner en $ipAddress…"
 
-                val savedEsclUrl = printer.esclUrl  // ej: http://192.168.1.20/eSCL
-
-                // Verificar si el path guardado responde
-                var esclBaseUrl = savedEsclUrl
-                val caps        = esclClient.getScannerCapabilities(savedEsclUrl)
+                var esclBaseUrl = printer.esclUrl
+                val caps        = esclClient.getScannerCapabilities(esclBaseUrl)
 
                 if (caps == null) {
-                    // No responde → buscar el path correcto probando puertos/paths
-                    _statusMessage.postValue("🔍 Buscando path eSCL alternativo…")
+                    _statusMessage.value = "🔍 Buscando path eSCL alternativo…"
                     val discovered = esclClient.discoverEsclPath(ipAddress)
 
                     if (discovered != null) {
                         esclBaseUrl = discovered
-                        // Extraer solo el path y guardarlo para próximas sesiones
+                        // Guardar el path corregido para próximas sesiones
                         val newPath = discovered
                             .removePrefix("http://$ipAddress")
                             .removePrefix(":80")
                             .removePrefix(":443")
                             .ifEmpty { "/eSCL" }
-                        database.printerDao().updatePrinter(printer.copy(esclPath = newPath))
+                        repository.updateEsclPath(printer, newPath)
                         Log.d(TAG, "✅ Path eSCL actualizado en BD: $newPath")
                     } else {
                         handleScanError(
@@ -203,7 +193,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                _statusMessage.postValue("🔍 Escaneando página $pageNum…")
+                _statusMessage.value = "🔍 Escaneando página $pageNum…"
 
                 val result = esclClient.scan(
                     esclBaseUrl,
@@ -212,7 +202,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                         colorMode  = if (_useColor.value == true) ScanColorMode.COLOR else ScanColorMode.GRAYSCALE,
                         source     = ScanSource.FLATBED,
                         format     = ScanFormat.JPEG,
-                        paperSize  = ScanPaperSize.A4,
+                        paperSize  = ScanPaperSize.A4,   // papel estándar de la L3560
                         intent     = ScanIntent.DOCUMENT
                     )
                 )
@@ -225,52 +215,51 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e(TAG, "Error en startScan: ${e.message}", e)
                 handleScanError("Error inesperado: ${e.message}")
             } finally {
-                _isScanning.postValue(false)
+                _isScanning.value = false
             }
         }
     }
 
-    private fun handleScanSuccess(result: ScanResult.Success, pageNum: Int) {
-        val file = savePageToDisk(result.data, pageNum)
-        if (file == null) { _statusMessage.postValue("❌ Error guardando página en disco"); return }
+    /** Se ejecuta en Main; el I/O de disco y el decode van a IO. */
+    private suspend fun handleScanSuccess(result: ScanResult.Success, pageNum: Int) {
+        val (file, thumb) = withContext(Dispatchers.IO) {
+            savePageToDisk(result.data, pageNum) to generateThumbnail(result.data)
+        }
+        if (file == null) {
+            _statusMessage.value = "❌ Error guardando página en disco"
+            return
+        }
 
         pageFiles.add(file)
-        val thumb = generateThumbnail(result.data)
         if (thumb != null) {
             thumbnailList.add(thumb)
-            _lastThumbnail.postValue(thumb)
-            _thumbnails.postValue(thumbnailList.toList())
+            _lastThumbnail.value = thumb
+            _thumbnails.value    = thumbnailList.toList()
         }
 
         val total  = pageFiles.size
-        val sizeMb = pageFiles.sumOf { it.length() } / (1024.0 * 1024.0)
-        _hasScannedData.postValue(true)
-        _pageCount.postValue(total)
-        _statusMessage.postValue(
+        val sizeMb = withContext(Dispatchers.IO) { pageFiles.sumOf { it.length() } } / (1024.0 * 1024.0)
+        _hasScannedData.value = true
+        _pageCount.value      = total
+        _statusMessage.value  =
             if (total == 1) "✅ Página 1 escaneada · Toca '➕ Agregar' para más"
             else "✅ $total páginas · %.1f MB en disco".format(sizeMb)
-        )
 
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { database.scanJobDao().updateScanJobStatus(currentJobId, "SCANNED") }
-        }
+        runCatching { database.scanJobDao().updateScanJobStatus(currentJobId, "SCANNED") }
     }
 
-    private fun handleScanError(message: String) {
-        _statusMessage.postValue("❌ $message")
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                if (currentJobId > 0) database.scanJobDao().updateScanJobStatus(currentJobId, "FAILED", message)
-            }
+    private suspend fun handleScanError(message: String) {
+        _statusMessage.value = "❌ $message"
+        runCatching {
+            if (currentJobId > 0) database.scanJobDao().updateScanJobStatus(currentJobId, "FAILED", message)
         }
         notificationManager.notifyScanError(message, currentJobId)
     }
 
-    // ── Disco y miniaturas ────────────────────────────────────────────────────
+    // ── Disco y miniaturas (llamar desde Dispatchers.IO) ──────────────────────
 
     private fun savePageToDisk(bytes: ByteArray, pageNum: Int): File? = try {
-        val dir  = scanDir ?: getApplication<Application>().cacheDir
-        val file = File(dir, "scan_p${pageNum}_${System.currentTimeMillis()}.jpg")
+        val file = File(scanDir, "scan_p${pageNum}_${System.currentTimeMillis()}.jpg")
         FileOutputStream(file).use { it.write(bytes) }
         file
     } catch (e: Exception) { Log.e(TAG, "saveToDisk: ${e.message}"); null }
@@ -295,137 +284,157 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Acciones ──────────────────────────────────────────────────────────────
 
-    fun scanNextPage()             = startScan(appendToExisting = true)
+    fun scanNextPage()               = startScan(appendToExisting = true)
     fun setColorMode(color: Boolean) { _useColor.value = color }
 
     fun deletePage(position: Int) {
-        if (position < 0 || position >= pageFiles.size) return
-        viewModelScope.launch(Dispatchers.IO) {
-            pageFiles.getOrNull(position)?.delete()
-            pageFiles.removeAt(position)
-            val thumbToRecycle = thumbnailList.getOrNull(position)
+        viewModelScope.launch {
+            // Main: mutación secuencial y segura de las listas
+            if (position < 0 || position >= pageFiles.size) return@launch
+            val file = pageFiles.removeAt(position)
             if (position < thumbnailList.size) thumbnailList.removeAt(position)
-            _thumbnails.postValue(thumbnailList.toList())
-            _pageCount.postValue(pageFiles.size)
-            _hasScannedData.postValue(pageFiles.isNotEmpty())
-            _statusMessage.postValue("Página ${position + 1} eliminada · ${pageFiles.size} restantes")
-            delay(100) // dar tiempo a la UI para procesar postValue antes de reciclar
-            thumbToRecycle?.let { if (!it.isRecycled) it.recycle() }
+
+            _thumbnails.value     = thumbnailList.toList()
+            _pageCount.value      = pageFiles.size
+            _hasScannedData.value = pageFiles.isNotEmpty()
+            _statusMessage.value  = "Página ${position + 1} eliminada · ${pageFiles.size} restantes"
+
+            withContext(Dispatchers.IO) { file.delete() }   // solo el I/O sale de Main
         }
     }
 
     fun clearPages() {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             clearInternalState()
-            _statusMessage.postValue("Páginas borradas — listo para nuevo escaneo")
+            _statusMessage.value = "Páginas borradas — listo para nuevo escaneo"
         }
     }
 
-    private fun clearInternalState() {
-        pageFiles.forEach { runCatching { it.delete() } }
+    /** Llamar SOLO desde el hilo Main (viewModelScope sin dispatcher). */
+    private suspend fun clearInternalState() {
+        val filesToDelete = pageFiles.toList()
         pageFiles.clear()
-        val toRecycle = thumbnailList.toList()
-        thumbnailList.clear()
+        thumbnailList.clear()      // sin recycle(): el GC libera las miniaturas
         currentJobId = -1
-        _thumbnails.postValue(emptyList())
-        _lastThumbnail.postValue(null)
-        _hasScannedData.postValue(false)
-        _pageCount.postValue(0)
-        viewModelScope.launch(Dispatchers.IO) {
-            delay(150)
-            toRecycle.forEach { runCatching { if (!it.isRecycled) it.recycle() } }
+        _thumbnails.value     = emptyList()
+        _lastThumbnail.value  = null
+        _hasScannedData.value = false
+        _pageCount.value      = 0
+        withContext(Dispatchers.IO) {
+            filesToDelete.forEach { runCatching { it.delete() } }
         }
     }
 
     // ── Guardar imágenes ──────────────────────────────────────────────────────
 
-    fun saveAsImages(context: Context) {
-        if (pageFiles.isEmpty()) { _saveResult.postValue("No hay páginas escaneadas"); return }
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val ts    = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                var saved = 0; var failed = 0
-                _statusMessage.postValue("💾 Guardando ${pageFiles.size} imágenes…")
+    fun saveAsImages() {
+        val files = pageFiles.toList()   // snapshot en Main
+        if (files.isEmpty()) { _saveResult.value = "No hay páginas escaneadas"; return }
 
-                pageFiles.forEachIndexed { i, file ->
-                    _statusMessage.postValue("💾 Guardando ${i + 1}/${pageFiles.size}…")
-                    try {
-                        val bytes = file.readBytes()
-                        val cv    = ContentValues().apply {
-                            put(MediaStore.Images.Media.DISPLAY_NAME,
-                                "SCAN_${ts}_p%03d.jpg".format(i + 1))
-                            put(MediaStore.Images.Media.MIME_TYPE,     "image/jpeg")
-                            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Scans")
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                                put(MediaStore.Images.Media.IS_PENDING, 1)
-                        }
-                        val uri = context.contentResolver.insert(
-                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv)
-                        if (uri != null) {
-                            context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                cv.clear(); cv.put(MediaStore.Images.Media.IS_PENDING, 0)
-                                context.contentResolver.update(uri, cv, null, null)
+        val resolver = getApplication<Application>().contentResolver
+
+        viewModelScope.launch {
+            try {
+                val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                _statusMessage.value = "💾 Guardando ${files.size} imágenes…"
+
+                val (saved, failed) = withContext(Dispatchers.IO) {
+                    var ok = 0
+                    var fail = 0
+                    files.forEachIndexed { i, file ->
+                        _statusMessage.postValue("💾 Guardando ${i + 1}/${files.size}…")
+                        try {
+                            val bytes = file.readBytes()
+                            val cv    = ContentValues().apply {
+                                put(MediaStore.Images.Media.DISPLAY_NAME,
+                                    "SCAN_${ts}_p%03d.jpg".format(i + 1))
+                                put(MediaStore.Images.Media.MIME_TYPE,     "image/jpeg")
+                                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Scans")
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                                    put(MediaStore.Images.Media.IS_PENDING, 1)
                             }
-                            saved++
-                        } else failed++
-                    } catch (e: Exception) { Log.e(TAG, "Error imagen ${i+1}: ${e.message}"); failed++ }
+                            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv)
+                            if (uri != null) {
+                                resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    cv.clear()
+                                    cv.put(MediaStore.Images.Media.IS_PENDING, 0)
+                                    resolver.update(uri, cv, null, null)
+                                }
+                                ok++
+                            } else fail++
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error imagen ${i + 1}: ${e.message}")
+                            fail++
+                        }
+                    }
+                    ok to fail
                 }
 
                 if (currentJobId > 0) database.scanJobDao().markScanCompleted(
                     currentJobId, "Pictures/Scans/SCAN_$ts",
-                    pageFiles.sumOf { it.length() })
+                    withContext(Dispatchers.IO) { files.sumOf { it.length() } })
 
                 notificationManager.notifyScanSuccess("SCAN_$ts ($saved imgs)", currentJobId)
-                _saveResult.postValue(
-                    when {
-                        failed == 0 -> "✅ $saved ${if (saved == 1) "imagen guardada" else "imágenes guardadas"} en Galería › Scans"
-                        saved  == 0 -> "❌ No se pudo guardar ninguna imagen"
-                        else        -> "⚠️ $saved guardadas, $failed fallaron"
-                    })
-                if (saved > 0) isSaveSuccess.postValue(true)
+                _saveResult.value = when {
+                    failed == 0 -> "✅ $saved ${if (saved == 1) "imagen guardada" else "imágenes guardadas"} en Galería › Scans"
+                    saved  == 0 -> "❌ No se pudo guardar ninguna imagen"
+                    else        -> "⚠️ $saved guardadas, $failed fallaron"
+                }
+                if (saved > 0) _isSaveSuccess.value = true
             } catch (e: Exception) {
-                _saveResult.postValue("❌ Error: ${e.message}")
+                _saveResult.value = "❌ Error: ${e.message}"
             }
         }
     }
 
-    // ── Guardar PDF (API nativa Android — sin iText7, sin problema de licencia) ──
+    // ── Guardar PDF (API nativa Android) ──────────────────────────────────────
 
-    fun savePdfToUri(uri: Uri, contentResolver: android.content.ContentResolver) {
-        if (pageFiles.isEmpty()) { _saveResult.postValue("No hay páginas para el PDF"); return }
-        viewModelScope.launch(Dispatchers.IO) {
-            var pdfDoc: PdfDocument? = null
+    fun savePdfToUri(uri: Uri) {
+        val files = pageFiles.toList()   // snapshot en Main
+        if (files.isEmpty()) { _saveResult.value = "No hay páginas para el PDF"; return }
+
+        val resolver = getApplication<Application>().contentResolver
+
+        viewModelScope.launch {
             try {
-                _statusMessage.postValue("📄 Creando PDF de ${pageFiles.size} páginas…")
-                pdfDoc = PdfDocument()
-                pageFiles.forEachIndexed { i, file ->
-                    _statusMessage.postValue("📄 Procesando ${i + 1}/${pageFiles.size}…")
-                    addPageToPdf(file, i + 1, pdfDoc)
+                _statusMessage.value = "📄 Creando PDF de ${files.size} páginas…"
+
+                withContext(Dispatchers.IO) {
+                    val pdfDoc = PdfDocument()
+                    try {
+                        files.forEachIndexed { i, file ->
+                            _statusMessage.postValue("📄 Procesando ${i + 1}/${files.size}…")
+                            addPageToPdf(file, i + 1, pdfDoc)
+                        }
+                        resolver.openOutputStream(uri)?.use { pdfDoc.writeTo(it) }
+                    } finally {
+                        pdfDoc.close()
+                    }
                 }
-                contentResolver.openOutputStream(uri)?.use { pdfDoc.writeTo(it) }
-                val n = pageFiles.size
+
+                val n = files.size
                 if (currentJobId > 0) database.scanJobDao().markScanCompleted(
                     currentJobId, uri.toString(),
-                    runCatching {
-                        contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: 0L
-                    }.getOrDefault(0L))
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            resolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: 0L
+                        }.getOrDefault(0L)
+                    })
                 notificationManager.notifyScanSuccess("${uri.lastPathSegment} ($n págs)", currentJobId)
-                _saveResult.postValue("✅ PDF guardado · $n ${if (n == 1) "página" else "páginas"}")
-                isSaveSuccess.postValue(true)
+                _saveResult.value    = "✅ PDF guardado · $n ${if (n == 1) "página" else "páginas"}"
+                _isSaveSuccess.value = true
             } catch (e: Exception) {
                 Log.e(TAG, "Error PDF: ${e.message}", e)
-                _saveResult.postValue("❌ Error al crear PDF: ${e.message}")
-            } finally {
-                pdfDoc?.close()
+                _saveResult.value = "❌ Error al crear PDF: ${e.message}"
             }
         }
     }
 
     /**
-     * Agrega una página al PDF.
-     * Lee del disco → decodifica con sampling → dibuja → recicla bitmap INMEDIATAMENTE.
-     * Nunca hay más de un bitmap completo en RAM al mismo tiempo.
+     * Agrega una página al PDF (llamar desde Dispatchers.IO).
+     * Lee del disco → decodifica con sampling → dibuja → recicla el bitmap.
+     * Aquí el recycle() SÍ es seguro: el bitmap es local, nadie más lo referencia.
      */
     private fun addPageToPdf(file: File, pageNumber: Int, pdfDoc: PdfDocument) {
         var bitmap: Bitmap? = null
@@ -434,33 +443,35 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             val opts  = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
 
-            val targetW  = (595 * AppConstants.SCAN_PDF_DPI / 72.0).toInt() // A4 a 150 DPI
-            val sample   = calcSampleSize(opts.outWidth, targetW)
-            bitmap       = BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
+            val targetW = (595 * AppConstants.SCAN_PDF_DPI / 72.0).toInt() // A4 a 150 DPI
+            val sample  = calcSampleSize(opts.outWidth, targetW)
+            bitmap      = BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
                 BitmapFactory.Options().apply {
                     inSampleSize      = sample
                     inPreferredConfig = Bitmap.Config.RGB_565
                 }) ?: createPlaceholder(pageNumber)
 
-            val pageW = 595; val pageH = 842  // A4 en puntos (72 DPI)
+            val pageW = 595
+            val pageH = 842  // A4 en puntos (72 DPI)
             val imgAspect  = bitmap.width.toFloat() / bitmap.height.toFloat()
             val pageAspect = pageW.toFloat() / pageH.toFloat()
             val (dW, dH)   = if (imgAspect > pageAspect)
-                Pair(pageW.toFloat(), pageW / imgAspect)
+                pageW.toFloat() to pageW / imgAspect
             else
-                Pair(pageH * imgAspect, pageH.toFloat())
+                pageH * imgAspect to pageH.toFloat()
 
             val pageInfo = PdfDocument.PageInfo.Builder(pageW, pageH, pageNumber).create()
             val page     = pdfDoc.startPage(pageInfo)
             page.canvas.drawColor(Color.WHITE)
-            val left = (pageW - dW) / 2f; val top = (pageH - dH) / 2f
+            val left = (pageW - dW) / 2f
+            val top  = (pageH - dH) / 2f
             page.canvas.drawBitmap(bitmap, null, RectF(left, top, left + dW, top + dH), null)
             pdfDoc.finishPage(page)
 
         } catch (e: Exception) {
             Log.e(TAG, "Error página $pageNumber en PDF: ${e.message}")
         } finally {
-            bitmap?.recycle()  // SIEMPRE liberar, incluso si hay excepción
+            bitmap?.recycle()
         }
     }
 
@@ -476,13 +487,6 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Limpieza ──────────────────────────────────────────────────────────────
 
-    fun clearError()         { errorMessage.value = null }
-    fun resetSaveSuccess()   { isSaveSuccess.value = false }
+    fun resetSaveSuccess()   { _isSaveSuccess.value = false }
     fun clearStatusMessage() { _statusMessage.value = null }
-
-    override fun onCleared() {
-        super.onCleared()
-        thumbnailList.forEach { runCatching { if (!it.isRecycled) it.recycle() } }
-        notificationManager.cancel()
-    }
 }

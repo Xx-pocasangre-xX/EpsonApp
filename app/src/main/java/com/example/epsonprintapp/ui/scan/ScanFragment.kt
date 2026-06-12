@@ -44,7 +44,7 @@ class ScanFragment : Fragment() {
     private val savePdfLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/pdf")
     ) { uri: Uri? ->
-        uri?.let { viewModel.savePdfToUri(it, requireContext().contentResolver) }
+        uri?.let { viewModel.savePdfToUri(it) }
     }
 
     override fun onCreateView(
@@ -167,7 +167,7 @@ class ScanFragment : Fragment() {
                 .show()
         }
 
-        btnSaveImages.setOnClickListener { viewModel.saveAsImages(requireContext()) }
+        btnSaveImages.setOnClickListener { viewModel.saveAsImages() }
 
         btnSavePdf.setOnClickListener {
             val count = viewModel.pageCount.value ?: 0

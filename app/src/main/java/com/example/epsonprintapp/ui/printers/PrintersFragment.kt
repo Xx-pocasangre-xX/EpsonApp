@@ -98,7 +98,7 @@ class PrintersFragment : Fragment() {
             ) = false
 
             override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {
-                val pos     = vh.adapterPosition
+                val pos     = vh.bindingAdapterPosition
                 val printer = adapter.getCurrentItems().getOrNull(pos)
                 if (printer != null) showDeleteConfirmation(printer)
                 adapter.notifyItemChanged(pos)

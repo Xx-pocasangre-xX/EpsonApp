@@ -6,24 +6,24 @@ import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.util.Log
 import com.example.epsonprintapp.AppConstants
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
 import java.net.URL
+import java.util.Collections
 
 /**
  * PrinterDiscovery — Descubre impresoras en la red local.
@@ -34,20 +34,22 @@ import java.net.URL
  * 2. Escaneo TCP de la red local — fallback cuando mDNS no responde
  * 3. Conexión manual por IP — cuando el usuario la ingresa explícitamente
  *
- * Para el Epson L3560:
- * - Puerto IPP: 631
- * - Path IPP: se obtiene del atributo mDNS "rp" (resource path)
- *   Típicamente "/ipp/print" pero puede variar
- * - Puerto eSCL: 80 (HTTP)
- * - Path eSCL: requiere habilitarlo en la impresora
- *   Panel impresora → Configuración → Config. de red → Avanzado → eSCL
+ * Para la Epson L3560:
+ * - Puerto IPP: 631 | Path IPP: atributo mDNS "rp" (típicamente "/ipp/print")
+ * - Puerto eSCL: 80 | Path eSCL: atributo mDNS "rs" (típicamente "/eSCL")
+ *   eSCL debe habilitarse en: Panel → Configuración → Config. de red → Avanzado
+ *
+ * Concurrencia: los callbacks de NsdManager llegan en hilos internos del
+ * sistema (uno por listener); todo el estado compartido del descubrimiento
+ * mDNS se protege con un lock. El escaneo TCP limita el paralelismo con un
+ * semáforo para no saturar Dispatchers.IO.
  */
 class PrinterDiscovery(private val context: Context) {
 
     companion object {
         private const val TAG = "PrinterDiscovery"
 
-        val SERVICE_TYPES = listOf(
+        private val SERVICE_TYPES = listOf(
             "_ipp._tcp.",
             "_ipps._tcp.",
             "_pdl-datastream._tcp.",
@@ -56,10 +58,7 @@ class PrinterDiscovery(private val context: Context) {
             "_scanner._tcp."
         )
 
-        // Solo puertos que confirman una impresora (no RAW 9100 para IPP)
-        // 9100 = RAW/PDL — NO enviar IPP aquí, solo detectar presencia
-        val PRINTER_DETECTION_PORTS = listOf(631, 80, 9100, 515)
-        val IPP_PORT = 631
+        private const val IPP_PORT = 631
     }
 
     private val connectivityManager: ConnectivityManager by lazy {
@@ -146,11 +145,16 @@ class PrinterDiscovery(private val context: Context) {
         return if (ip == "0.0.0.0") null else ip.substringBeforeLast(".")
     }
 
+    /** Rangos privados RFC 1918: 10/8, 172.16/12, 192.168/16. */
     private fun isPrivateIp(ip: String): Boolean {
-        if (ip.isBlank() || ip == "0.0.0.0") return false
-        return ip.startsWith("192.168.") ||
-                ip.startsWith("10.") ||
-                (1..31).any { ip.startsWith("172.$it.") }
+        val octets = ip.split(".").mapNotNull { it.toIntOrNull() }
+        if (octets.size != 4 || octets.any { it !in 0..255 }) return false
+        return when {
+            octets[0] == 10                         -> true
+            octets[0] == 192 && octets[1] == 168    -> true
+            octets[0] == 172 && octets[1] in 16..31 -> true
+            else                                    -> false
+        }
     }
 
     fun isValidIpAddress(ip: String): Boolean {
@@ -168,42 +172,50 @@ class PrinterDiscovery(private val context: Context) {
      * registro mDNS — así nunca usamos un path incorrecto hardcodeado.
      *
      * NsdManager solo permite 1 ResolveListener activo: usamos cola secuencial.
+     * Los callbacks llegan en hilos del sistema → estado protegido con lock.
      */
     fun discoverPrinters(): Flow<PrinterInfo> = callbackFlow {
         val multicastLock = try {
             wifiManager.createMulticastLock("EpsonDiscovery").apply {
-                setReferenceCounted(true); acquire()
+                setReferenceCounted(true)
+                acquire()
             }
         } catch (e: Exception) { null }
 
+        val stateLock       = Any()
         val discoveredIps   = mutableSetOf<String>()
         val pendingResolve  = ArrayDeque<NsdServiceInfo>()
-        val activeListeners = mutableListOf<NsdManager.DiscoveryListener>()
+        val activeListeners = Collections.synchronizedList(mutableListOf<NsdManager.DiscoveryListener>())
         var isResolving     = false
 
         fun resolveNext() {
-            if (isResolving || pendingResolve.isEmpty()) return
-            val info = pendingResolve.removeFirstOrNull() ?: return
-            isResolving = true
+            // Sacar el siguiente de la cola de forma atómica
+            val info = synchronized(stateLock) {
+                if (isResolving) return
+                pendingResolve.removeFirstOrNull()?.also { isResolving = true }
+            } ?: return
 
             nsdManager.resolveService(info, object : NsdManager.ResolveListener {
                 override fun onResolveFailed(i: NsdServiceInfo?, code: Int) {
                     Log.w(TAG, "Resolve fallido ${i?.serviceName}: $code")
-                    isResolving = false; resolveNext()
+                    synchronized(stateLock) { isResolving = false }
+                    resolveNext()
                 }
+
                 override fun onServiceResolved(i: NsdServiceInfo?) {
-                    isResolving = false
-                    i ?: run { resolveNext(); return }
+                    synchronized(stateLock) { isResolving = false }
+                    if (i == null) { resolveNext(); return }
 
                     val ip = i.host?.hostAddress
-                    if (ip.isNullOrBlank() || ip == "0.0.0.0" || !discoveredIps.add(ip)) {
+                    if (ip.isNullOrBlank() || ip == "0.0.0.0" ||
+                        !synchronized(stateLock) { discoveredIps.add(ip) }
+                    ) {
                         resolveNext(); return
                     }
 
-                    // Puerto IPP: usar 631 siempre para IPP
-                    // Si mDNS reporta 9100 es PDL/RAW, el IPP real es 631
-                    val rawPort  = i.port.takeIf { it > 0 } ?: IPP_PORT
-                    val ippPort  = if (rawPort == 9100) IPP_PORT else rawPort
+                    // Puerto IPP: si mDNS reporta 9100 es PDL/RAW, el IPP real es 631
+                    val rawPort = i.port.takeIf { it > 0 } ?: IPP_PORT
+                    val ippPort = if (rawPort == 9100) IPP_PORT else rawPort
 
                     // Path IPP real desde atributo "rp" del registro mDNS
                     val ippPath  = extractAttr(i.attributes, "rp")
@@ -243,7 +255,7 @@ class PrinterDiscovery(private val context: Context) {
                 override fun onServiceFound(info: NsdServiceInfo?) {
                     info ?: return
                     Log.d(TAG, "Servicio encontrado: ${info.serviceName}")
-                    pendingResolve.add(info)
+                    synchronized(stateLock) { pendingResolve.add(info) }
                     resolveNext()
                 }
                 override fun onServiceLost(info: NsdServiceInfo?) {}
@@ -263,32 +275,33 @@ class PrinterDiscovery(private val context: Context) {
     // ── TCP Scan ──────────────────────────────────────────────────────────────
 
     /**
-     * Escanea la subred local en paralelo.
-     * Detecta presencia por puertos, pero SIEMPRE guarda ippPort=631.
+     * Escanea la subred local (x.x.x.1-254) detectando puertos de impresora.
+     * El paralelismo se limita con un semáforo para no agotar los hilos de
+     * Dispatchers.IO. Siempre reporta ippPort=631 (IPP nunca es 9100).
      */
-    fun scanNetworkForPrinters(): Flow<PrinterInfo> = flow {
-        val prefix   = getNetworkPrefix() ?: return@flow
+    fun scanNetworkForPrinters(): Flow<PrinterInfo> = channelFlow {
+        val prefix   = getNetworkPrefix() ?: return@channelFlow
         val deviceIp = getDeviceIpAddress()
         Log.d(TAG, "TCP scan: $prefix.1-254")
 
-        val channel = Channel<PrinterInfo>(Channel.BUFFERED)
-        val found   = mutableSetOf<String>()
+        val semaphore = Semaphore(AppConstants.SCAN_MAX_PARALLEL_PROBES)
+        val found     = Collections.synchronizedSet(mutableSetOf<String>())
 
         withContext(Dispatchers.IO) {
-            coroutineScope {
-                (1..254).map { host ->
-                    async {
+            (1..254).map { host ->
+                launch {
+                    semaphore.withPermit {
                         val ip = "$prefix.$host"
-                        if (ip == deviceIp) return@async
+                        if (ip == deviceIp) return@withPermit
 
-                        // Detectar si hay impresora por cualquier puerto
                         val hasIpp  = isPortOpen(ip, 631)
                         val hasRaw  = isPortOpen(ip, 9100)
                         val hasHttp = isPortOpen(ip, 80)
 
-                        if (hasIpp || hasRaw || hasHttp) {
+                        if ((hasIpp || hasRaw || hasHttp) && found.add(ip)) {
                             val model = tryGetModelViaHttp(ip)
-                            channel.trySend(PrinterInfo(
+                            Log.d(TAG, "TCP: ${model ?: "Impresora"} @ $ip")
+                            send(PrinterInfo(
                                 name          = model ?: "Impresora ($ip)",
                                 ipAddress     = ip,
                                 ippPort       = 631,      // SIEMPRE 631 para IPP
@@ -301,16 +314,8 @@ class PrinterDiscovery(private val context: Context) {
                             ))
                         }
                     }
-                }.awaitAll()
-                channel.close()
-            }
-        }
-
-        for (info in channel) {
-            if (found.add(info.ipAddress)) {
-                Log.d(TAG, "TCP: ${info.displayName} @ ${info.ipAddress}")
-                emit(info)
-            }
+                }
+            }.joinAll()
         }
     }
 
@@ -362,24 +367,26 @@ class PrinterDiscovery(private val context: Context) {
     private fun discoverIppPath(ip: String): String? {
         val candidates = listOf("/ipp/print", "/ipp", "/ipp/port1", "/")
         for (path in candidates) {
-            return try {
+            try {
                 val conn = URL("http://$ip:631$path").openConnection() as HttpURLConnection
-                conn.connectTimeout = 2000
-                conn.readTimeout    = 2000
-                conn.requestMethod  = "POST"
-                conn.setRequestProperty("Content-Type", "application/ipp")
-                conn.setRequestProperty("Content-Length", "0")
-                conn.doOutput = true
-                conn.outputStream.write(ByteArray(0))
-                // Cualquier respuesta (incluso error) confirma que el path existe
-                val code = conn.responseCode
-                conn.disconnect()
-                if (code > 0) {
-                    Log.d(TAG, "Path IPP encontrado: $path (HTTP $code)")
-                    path
-                } else continue
-            } catch (e: Exception) {
-                continue
+                try {
+                    conn.connectTimeout = 2000
+                    conn.readTimeout    = 2000
+                    conn.requestMethod  = "POST"
+                    conn.setRequestProperty("Content-Type", "application/ipp")
+                    conn.doOutput = true
+                    conn.outputStream.write(ByteArray(0))
+                    // Cualquier respuesta (incluso error) confirma que el path existe
+                    val code = conn.responseCode
+                    if (code > 0) {
+                        Log.d(TAG, "Path IPP encontrado: $path (HTTP $code)")
+                        return path
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (_: Exception) {
+                // probar el siguiente path
             }
         }
         return null
@@ -393,13 +400,18 @@ class PrinterDiscovery(private val context: Context) {
 
     private fun tryGetModelViaHttp(ip: String): String? = try {
         val conn = URL("http://$ip/").openConnection() as HttpURLConnection
-        conn.connectTimeout = 1500; conn.readTimeout = 1500
-        conn.requestMethod = "GET"; conn.instanceFollowRedirects = false
-        val html = conn.inputStream.bufferedReader().readText()
-        conn.disconnect()
-        Regex("<title[^>]*>([^<]+)</title>", RegexOption.IGNORE_CASE)
-            .find(html)?.groupValues?.get(1)?.trim()?.take(60)
-            ?.takeIf { it.isNotBlank() && it.length > 3 }
+        try {
+            conn.connectTimeout = 1500
+            conn.readTimeout    = 1500
+            conn.requestMethod  = "GET"
+            conn.instanceFollowRedirects = false
+            val html = conn.inputStream.bufferedReader().readText()
+            Regex("<title[^>]*>([^<]+)</title>", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.get(1)?.trim()?.take(60)
+                ?.takeIf { it.isNotBlank() && it.length > 3 }
+        } finally {
+            conn.disconnect()
+        }
     } catch (_: Exception) { null }
 
     private fun extractAttr(attrs: Map<String, ByteArray>?, vararg keys: String): String? {

@@ -1,12 +1,17 @@
 package com.example.epsonprintapp.printer
 
-import android.content.Context
 import android.util.Log
 import com.example.epsonprintapp.AppConstants
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import okio.source
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.InputStream
@@ -15,22 +20,23 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * IppClient — Cliente IPP 2.0.
+ * IppClient — Cliente IPP 2.0 (Internet Printing Protocol).
  *
- * CORRECCIONES para Epson L3560:
- * ================================
- * 1. El puerto 9100 es RAW printing, NO es IPP. IPP siempre es puerto 631.
- *    La función buildIppUrl() fuerza el puerto 631 si detecta 9100.
+ * Diseñado para la Epson L3560 pero compatible con cualquier impresora IPP:
+ * - El puerto 9100 es RAW printing, NO es IPP. IPP siempre es puerto 631.
+ *   fixIppUrl() fuerza el puerto 631 si detecta 9100.
+ * - La L3560 a veces rechaza JPEG con HTTP 500: hay retry con
+ *   application/octet-stream como fallback.
+ * - ipp-attribute-fidelity = false siempre, para que la impresora ignore
+ *   atributos que no soporte en lugar de rechazar el trabajo.
+ * - La L3560 NO tiene dúplex automático: resolveSides() solo envía "sides"
+ *   si la impresora reportó soportarlo, evitando errores 0x040B.
  *
- * 2. HTTP 500 al imprimir JPEG: el L3560 a veces rechaza JPEG directamente.
- *    Se agrega retry con application/octet-stream como fallback.
- *
- * 3. Respuesta vacía: se aumentó el timeout de lectura y se verifica
- *    el Content-Length antes de leer.
- *
- * 4. ipp-attribute-fidelity: cambiado a false siempre para mayor compatibilidad.
+ * Contrato de concurrencia: todas las funciones suspend son main-safe
+ * (el I/O se aísla internamente en Dispatchers.IO). El documento se envía
+ * en streaming — nunca se carga completo en memoria.
  */
-class IppClient(private val context: Context) {
+class IppClient(baseClient: OkHttpClient) {
 
     companion object {
         private const val TAG = "IppClient"
@@ -66,6 +72,8 @@ class IppClient(private val context: Context) {
         }
     }
 
+    // Capacidades detectadas en el último getPrinterStatus().
+    // @Volatile: se escriben desde Dispatchers.IO y se leen desde cualquier hilo.
     @Volatile var detectedMediaReady:  String?       = null;   private set
     @Volatile var detectedColorModes:  List<String>  = emptyList(); private set
     @Volatile var detectedSides:       List<String>  = emptyList(); private set
@@ -73,35 +81,35 @@ class IppClient(private val context: Context) {
     @Volatile var supportsColor:       Boolean       = true;   private set
     @Volatile var supportsDuplex:      Boolean       = false;  private set
 
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(AppConstants.HTTP_CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
+    // Deriva del cliente base compartido: mismo pool de conexiones, timeouts propios
+    private val http = baseClient.newBuilder()
         .readTimeout(AppConstants.HTTP_READ_TIMEOUT_S, TimeUnit.SECONDS)
         .writeTimeout(AppConstants.HTTP_WRITE_TIMEOUT_S, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
         .build()
 
     // ── GET PRINTER STATUS ────────────────────────────────────────────────────
 
-    suspend fun getPrinterStatus(printerUrl: String): PrinterStatus? {
+    suspend fun getPrinterStatus(printerUrl: String): PrinterStatus? = withContext(Dispatchers.IO) {
         val correctedUrl = fixIppUrl(printerUrl)
         if (correctedUrl != printerUrl) {
             Log.d(TAG, "URL corregida: $printerUrl → $correctedUrl")
         }
-        return try {
+        try {
             Log.d(TAG, "Consultando estado: $correctedUrl")
             val req = Request.Builder()
                 .url(correctedUrl)
                 .post(buildGetPrinterAttrs(correctedUrl).toRequestBody(IPP_MEDIA_TYPE))
-                .addHeader("Content-Type", "application/ipp")
-                .addHeader("Accept",       "application/ipp")
+                .addHeader("Accept", "application/ipp")
                 .build()
-            val resp  = http.newCall(req).execute()
-            val bytes = resp.body?.bytes()
-            if (bytes == null || bytes.isEmpty()) {
-                Log.w(TAG, "Respuesta vacía de getPrinterStatus")
-                return null
+            http.newCall(req).execute().use { resp ->
+                val bytes = resp.body?.bytes()
+                if (bytes == null || bytes.isEmpty()) {
+                    Log.w(TAG, "Respuesta vacía de getPrinterStatus (HTTP ${resp.code})")
+                    null
+                } else {
+                    parsePrinterAttrs(bytes)
+                }
             }
-            parsePrinterAttrs(bytes)
         } catch (e: Exception) {
             Log.e(TAG, "getPrinterStatus error: ${e.message}")
             null
@@ -110,35 +118,34 @@ class IppClient(private val context: Context) {
 
     // ── PRINT DOCUMENT ────────────────────────────────────────────────────────
 
+    /**
+     * Imprime un documento enviándolo en streaming.
+     *
+     * @param documentSource Proveedor del stream del documento. Se invoca una vez
+     *   por intento (hasta 3 intentos), de modo que cada retry reabre el documento
+     *   sin haberlo retenido en memoria.
+     */
     suspend fun printDocument(
         printerUrl:     String,
-        documentStream: InputStream,
         mimeType:       String,
-        printOptions:   PrintOptions
-    ): PrintJobResult? {
+        printOptions:   PrintOptions,
+        documentSource: () -> InputStream?
+    ): PrintJobResult? = withContext(Dispatchers.IO) {
         val correctedUrl = fixIppUrl(printerUrl)
-        return try {
-            val docBytes = documentStream.readBytes()
-            Log.d(TAG, "Imprimiendo ${docBytes.size} bytes | mime=$mimeType | url=$correctedUrl")
-
-            if (docBytes.isEmpty()) {
-                Log.e(TAG, "Documento vacío — no se puede imprimir")
-                return PrintJobResult(false, -1, 0, "", "El documento está vacío", -1)
-            }
-
+        try {
             // Intento 1: con todas las opciones
-            var result = sendPrintJob(correctedUrl, docBytes, mimeType, printOptions, minimal = false)
+            var result = sendPrintJob(correctedUrl, mimeType, printOptions, minimal = false, documentSource)
 
-            // Intento 2: modo mínimo si falla con 0x0400 o 0x040B
+            // Intento 2: modo mínimo si la impresora rechazó atributos (0x0400 / 0x040B)
             if (result?.statusCode == 0x0400 || result?.statusCode == 0x040B) {
-                Log.w(TAG, "Atributo rechazado → reintentando modo mínimo")
-                result = sendPrintJob(correctedUrl, docBytes, mimeType, printOptions, minimal = true)
+                Log.w(TAG, "Atributo rechazado → reintentando en modo mínimo")
+                result = sendPrintJob(correctedUrl, mimeType, printOptions, minimal = true, documentSource)
             }
 
-            // Intento 3: si HTTP 500, probar con octet-stream
+            // Intento 3: si HTTP 500 (la L3560 a veces rechaza JPEG), probar octet-stream
             if (result == null || result.statusCode == 500) {
-                Log.w(TAG, "HTTP 500 → reintentando con application/octet-stream")
-                result = sendPrintJob(correctedUrl, docBytes, "application/octet-stream", printOptions, minimal = true)
+                Log.w(TAG, "Fallo HTTP → reintentando con application/octet-stream")
+                result = sendPrintJob(correctedUrl, "application/octet-stream", printOptions, minimal = true, documentSource)
             }
 
             result
@@ -148,33 +155,53 @@ class IppClient(private val context: Context) {
         }
     }
 
-    private suspend fun sendPrintJob(
-        printerUrl: String,
-        docBytes:   ByteArray,
-        mimeType:   String,
-        options:    PrintOptions,
-        minimal:    Boolean
+    private fun sendPrintJob(
+        printerUrl:     String,
+        mimeType:       String,
+        options:        PrintOptions,
+        minimal:        Boolean,
+        documentSource: () -> InputStream?
     ): PrintJobResult? {
+        val header   = buildPrintJob(printerUrl, mimeType, options, minimal)
+        val document = documentSource()
+            ?: return PrintJobResult(false, -1, 0, "", "No se pudo abrir el documento", -1)
+
+        // Body en streaming: cabecera IPP + documento, sin copias intermedias en RAM
+        val body = object : RequestBody() {
+            override fun contentType(): MediaType = IPP_MEDIA_TYPE
+            override fun isOneShot(): Boolean = true   // los reintentos los gestionamos nosotros
+            override fun writeTo(sink: BufferedSink) {
+                sink.write(header)
+                document.use { sink.writeAll(it.source()) }
+            }
+        }
+
         return try {
-            val payload = buildPrintJob(printerUrl, mimeType, options, minimal) + docBytes
             val req = Request.Builder()
                 .url(printerUrl)
-                .post(payload.toRequestBody(IPP_MEDIA_TYPE))
-                .addHeader("Content-Type", "application/ipp")
-                .addHeader("Accept",       "application/ipp")
+                .post(body)
+                .addHeader("Accept", "application/ipp")
                 .build()
-            val resp  = http.newCall(req).execute()
-            Log.d(TAG, "HTTP ${resp.code} al imprimir (minimal=$minimal, mime=$mimeType)")
-            val bytes = resp.body?.bytes()
-            if (bytes == null || bytes.isEmpty()) {
-                Log.w(TAG, "Respuesta vacía del servidor IPP")
-                // Una respuesta vacía con HTTP 200 puede significar éxito en algunos firmware Epson
-                return if (resp.code == 200) {
-                    PrintJobResult(success = true, jobId = -1, jobState = 5,
-                        stateReasons = "completed", errorMessage = null, statusCode = 0)
-                } else null
+            http.newCall(req).execute().use { resp ->
+                Log.d(TAG, "HTTP ${resp.code} al imprimir (minimal=$minimal, mime=$mimeType)")
+                when {
+                    resp.code == 500 ->
+                        PrintJobResult(false, -1, 0, "", "Error interno de la impresora (HTTP 500)", 500)
+
+                    else -> {
+                        val bytes = resp.body?.bytes()
+                        if (bytes == null || bytes.isEmpty()) {
+                            // Respuesta vacía con HTTP 200 = éxito en algunos firmware Epson
+                            if (resp.code == 200) {
+                                PrintJobResult(success = true, jobId = -1, jobState = 5,
+                                    stateReasons = "completed", errorMessage = null, statusCode = 0)
+                            } else null
+                        } else {
+                            parsePrintJobResp(bytes)
+                        }
+                    }
+                }
             }
-            parsePrintJobResp(bytes)
         } catch (e: Exception) {
             Log.e(TAG, "sendPrintJob: ${e.message}")
             null
@@ -184,7 +211,8 @@ class IppClient(private val context: Context) {
     // ── BUILDERS ──────────────────────────────────────────────────────────────
 
     private fun buildGetPrinterAttrs(url: String): ByteArray {
-        val buf = ByteArrayOutputStream(); val out = DataOutputStream(buf)
+        val buf = ByteArrayOutputStream()
+        val out = DataOutputStream(buf)
         writeIppHeader(out, OP_GET_PRINTER_ATTRS)
         out.writeByte(TAG_OPERATION_ATTRIBUTES.toInt())
         ws(out, TAG_CHARSET,          "attributes-charset",          "utf-8")
@@ -207,7 +235,8 @@ class IppClient(private val context: Context) {
     }
 
     private fun buildPrintJob(url: String, mime: String, opts: PrintOptions, minimal: Boolean): ByteArray {
-        val buf = ByteArrayOutputStream(); val out = DataOutputStream(buf)
+        val buf = ByteArrayOutputStream()
+        val out = DataOutputStream(buf)
         writeIppHeader(out, OP_PRINT_JOB)
         out.writeByte(TAG_OPERATION_ATTRIBUTES.toInt())
         ws(out, TAG_CHARSET,               "attributes-charset",          "utf-8")
@@ -234,13 +263,14 @@ class IppClient(private val context: Context) {
     // ── RESOLVERS ─────────────────────────────────────────────────────────────
 
     private fun resolveMedia(paperSize: PaperSize): String {
+        // Prioridad: el papel que la impresora reporta tener cargado (media-ready)
         detectedMediaReady?.takeIf { it.isNotBlank() }?.let { return it }
         return when (paperSize) {
             PaperSize.A4        -> "iso_a4_210x297mm"
             PaperSize.LETTER    -> "na_letter_8.5x11in"
-            PaperSize.A3        -> "iso_a3_297x420mm"
-            PaperSize.A5        -> "iso_a5_148x210mm"
             PaperSize.LEGAL     -> "na_legal_8.5x14in"
+            PaperSize.A5        -> "iso_a5_148x210mm"
+            PaperSize.A3        -> "iso_a3_297x420mm"
             PaperSize.PHOTO_4X6 -> "na_index-4x6_4x6in"
         }
     }
@@ -259,43 +289,68 @@ class IppClient(private val context: Context) {
         }
     }
 
+    /**
+     * Solo envía un modo dúplex si la impresora lo reportó como soportado.
+     * La Epson L3560 no tiene dúplex automático: pedir two-sided causaría
+     * un conflicto de atributos (0x040B); en su lugar se omite el atributo.
+     */
     private fun resolveSides(mode: DuplexMode): String? {
         val supported = detectedSides.map { it.lowercase() }
+        fun ifSupported(value: String) = value.takeIf { supported.isEmpty() || it in supported }
         return when (mode) {
-            DuplexMode.ONE_SIDED       -> if ("one-sided" in supported || supported.isEmpty()) "one-sided" else null
-            DuplexMode.TWO_SIDED_LONG  -> "two-sided-long-edge"
-            DuplexMode.TWO_SIDED_SHORT -> "two-sided-short-edge"
+            DuplexMode.ONE_SIDED       -> ifSupported("one-sided")
+            DuplexMode.TWO_SIDED_LONG  -> ifSupported("two-sided-long-edge")
+            DuplexMode.TWO_SIDED_SHORT -> ifSupported("two-sided-short-edge")
         }
     }
 
     // ── WRITE HELPERS ─────────────────────────────────────────────────────────
 
     private fun writeIppHeader(out: DataOutputStream, op: Short) {
-        out.writeByte(IPP_VERSION_MAJOR.toInt()); out.writeByte(IPP_VERSION_MINOR.toInt())
-        out.writeShort(op.toInt()); out.writeInt(nextId())
+        out.writeByte(IPP_VERSION_MAJOR.toInt())
+        out.writeByte(IPP_VERSION_MINOR.toInt())
+        out.writeShort(op.toInt())
+        out.writeInt(nextId())
     }
 
     private fun ws(out: DataOutputStream, tag: Byte, name: String, value: String) {
-        val nb = name.toByteArray(Charsets.US_ASCII); val vb = value.toByteArray(Charsets.UTF_8)
-        out.writeByte(tag.toInt()); out.writeShort(nb.size); out.write(nb)
-        out.writeShort(vb.size);   out.write(vb)
+        val nb = name.toByteArray(Charsets.US_ASCII)
+        val vb = value.toByteArray(Charsets.UTF_8)
+        out.writeByte(tag.toInt())
+        out.writeShort(nb.size)
+        out.write(nb)
+        out.writeShort(vb.size)
+        out.write(vb)
     }
+
     private fun we(out: DataOutputStream, tag: Byte, value: String) {
         val vb = value.toByteArray(Charsets.UTF_8)
-        out.writeByte(tag.toInt()); out.writeShort(0)
-        out.writeShort(vb.size);   out.write(vb)
+        out.writeByte(tag.toInt())
+        out.writeShort(0)
+        out.writeShort(vb.size)
+        out.write(vb)
     }
+
     private fun wi(out: DataOutputStream, name: String, value: Int) {
         val nb = name.toByteArray(Charsets.US_ASCII)
-        out.writeByte(TAG_INTEGER.toInt()); out.writeShort(nb.size); out.write(nb)
-        out.writeShort(4); out.writeInt(value)
+        out.writeByte(TAG_INTEGER.toInt())
+        out.writeShort(nb.size)
+        out.write(nb)
+        out.writeShort(4)
+        out.writeInt(value)
     }
+
     private fun wb(out: DataOutputStream, name: String, value: Boolean) {
         val nb = name.toByteArray(Charsets.US_ASCII)
-        out.writeByte(TAG_BOOLEAN.toInt()); out.writeShort(nb.size); out.write(nb)
-        out.writeShort(1); out.writeByte(if (value) 1 else 0)
+        out.writeByte(TAG_BOOLEAN.toInt())
+        out.writeShort(nb.size)
+        out.write(nb)
+        out.writeShort(1)
+        out.writeByte(if (value) 1 else 0)
     }
-    private fun toIpp(url: String) = url.replaceFirst("http://", "ipp://").replaceFirst("https://", "ipps://")
+
+    private fun toIpp(url: String) =
+        url.replaceFirst("http://", "ipp://").replaceFirst("https://", "ipps://")
 
     // ── PARSERS ───────────────────────────────────────────────────────────────
 
@@ -317,7 +372,12 @@ class IppClient(private val context: Context) {
         supportsDuplex     = detectedSides.any { it.contains("two-sided", ignoreCase = true) }
 
         return PrinterStatus(
-            state               = when (printerState) { 3 -> PrinterState.IDLE; 4 -> PrinterState.PROCESSING; 5 -> PrinterState.STOPPED; else -> PrinterState.UNKNOWN },
+            state               = when (printerState) {
+                3    -> PrinterState.IDLE
+                4    -> PrinterState.PROCESSING
+                5    -> PrinterState.STOPPED
+                else -> PrinterState.UNKNOWN
+            },
             stateReasons        = stateReasons,
             inkLevels           = parseInkLevels(attrs),
             hasPaper            = !stateReasons.contains("media-empty") && !stateReasons.contains("media-needed"),
@@ -351,9 +411,11 @@ class IppClient(private val context: Context) {
 
     private fun parseAttrs(bytes: ByteArray): Map<String, String> {
         val map = mutableMapOf<String, String>()
-        var pos = 8; var name = ""
+        var pos = 8
+        var name = ""
         while (pos < bytes.size) {
-            val tag = bytes[pos].toInt() and 0xFF; pos++
+            val tag = bytes[pos].toInt() and 0xFF
+            pos++
             when (tag) {
                 0x03 -> return map
                 0x01, 0x02, 0x04, 0x05, 0x06 -> continue
@@ -395,8 +457,12 @@ class IppClient(private val context: Context) {
         return when (levels.size) {
             1    -> InkLevels(black = norm(levels[0], highs?.getOrNull(0)))
             2    -> InkLevels(black = norm(levels[0], highs?.getOrNull(0)), cyan = norm(levels[1], highs?.getOrNull(1)))
-            4    -> InkLevels(cyan  = norm(levels[0], highs?.getOrNull(0)), magenta = norm(levels[1], highs?.getOrNull(1)),
-                yellow = norm(levels[2], highs?.getOrNull(2)), black   = norm(levels[3], highs?.getOrNull(3)))
+            4    -> InkLevels(
+                cyan    = norm(levels[0], highs?.getOrNull(0)),
+                magenta = norm(levels[1], highs?.getOrNull(1)),
+                yellow  = norm(levels[2], highs?.getOrNull(2)),
+                black   = norm(levels[3], highs?.getOrNull(3))
+            )
             else -> InkLevels()
         }
     }
@@ -432,6 +498,7 @@ data class PrinterStatus(
 }
 
 enum class PrinterState { IDLE, PROCESSING, STOPPED, UNKNOWN }
+
 data class InkLevels(
     val cyan: Int = -1, val magenta: Int = -1, val yellow: Int = -1, val black: Int = -1
 ) { val isAvailable: Boolean get() = cyan >= 0 || black >= 0 }
@@ -440,12 +507,19 @@ data class PrintJobResult(
     val success: Boolean, val jobId: Int, val jobState: Int,
     val stateReasons: String, val errorMessage: String?, val statusCode: Int
 )
+
+/**
+ * Opciones de impresión. Por defecto A4: es el papel estándar de la
+ * Epson L3560 (serie EcoTank). El tamaño real se ajusta automáticamente
+ * al papel cargado que reporte la impresora (media-ready).
+ */
 data class PrintOptions(
     val copies: Int = 1, val colorMode: ColorMode = ColorMode.AUTO,
-    val duplex: DuplexMode = DuplexMode.ONE_SIDED, val paperSize: PaperSize = PaperSize.LETTER,
+    val duplex: DuplexMode = DuplexMode.ONE_SIDED, val paperSize: PaperSize = PaperSize.A4,
     val quality: PrintQuality = PrintQuality.NORMAL
 )
+
 enum class ColorMode    { COLOR, MONOCHROME, AUTO }
 enum class DuplexMode   { ONE_SIDED, TWO_SIDED_LONG, TWO_SIDED_SHORT }
-enum class PaperSize    { A4, LETTER, A3, A5, LEGAL, PHOTO_4X6 }
+enum class PaperSize    { A4, LETTER, LEGAL, A5, A3, PHOTO_4X6 }
 enum class PrintQuality(val value: Int) { DRAFT(3), NORMAL(4), HIGH(5) }

@@ -1,22 +1,21 @@
 package com.example.epsonprintapp.ui.printers
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.asLiveData
 import androidx.lifecycle.viewModelScope
 import com.example.epsonprintapp.AppConstants
-import com.example.epsonprintapp.database.AppDatabase
+import com.example.epsonprintapp.appContainer
+import com.example.epsonprintapp.data.AddPrinterResult
 import com.example.epsonprintapp.database.entities.PrinterEntity
-import com.example.epsonprintapp.network.PrinterDiscovery
 import com.example.epsonprintapp.network.PrinterInfo
-import com.example.epsonprintapp.printer.IppClient
 import com.example.epsonprintapp.printer.PrinterStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -24,21 +23,21 @@ import kotlinx.coroutines.withTimeout
 /**
  * PrintersViewModel — Gestiona la pantalla de lista de impresoras.
  *
- * ARQUITECTURA SIMPLIFICADA: usa AppDatabase y PrinterDiscovery directamente,
- * igual que DashboardViewModel, para evitar dependencias intermedias que
- * causen fallos de compilación en cadena.
+ * Toda la persistencia pasa por PrinterRepository (las mismas reglas de
+ * normalización de puerto y predeterminada que el resto de la app).
  */
 class PrintersViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val database  = AppDatabase.getInstance(application)
-    private val dao       = database.printerDao()
-    private val discovery = PrinterDiscovery(application)
-    private val ippClient = IppClient(application)
+    companion object { private const val TAG = "PrintersVM" }
+
+    private val container  = application.appContainer
+    private val repository = container.printerRepository
+    private val discovery  = container.printerDiscovery
 
     // ── LiveData pública ───────────────────────────────────────────────────────
 
     val savedPrinters: LiveData<List<PrinterEntity>> =
-        dao.getAllPrinters().asLiveData()
+        repository.getAllPrinters().asLiveData()
 
     private val _isDiscovering = MutableLiveData(false)
     val isDiscovering: LiveData<Boolean> = _isDiscovering
@@ -87,15 +86,15 @@ class PrintersViewModel(application: Application) : AndroidViewModel(application
             _isDiscovering.postValue(true)
             _discoveryStatus.postValue("🔍 Buscando impresoras por mDNS…")
 
-            val seenIps    = mutableSetOf<String>()
+            val seenIps     = mutableSetOf<String>()
             val accumulated = mutableListOf<PrinterInfo>()
-            var mDnsCount  = 0
+            var mDnsCount   = 0
 
             // Fase 1: mDNS
             try {
                 withTimeout(AppConstants.DISCOVERY_TIMEOUT_MS) {
                     discovery.discoverPrinters()
-                        .catch { e -> android.util.Log.w("PrintersVM", "mDNS: ${e.message}") }
+                        .catch { e -> Log.w(TAG, "mDNS: ${e.message}") }
                         .collect { printer ->
                             if (seenIps.add(printer.ipAddress)) {
                                 mDnsCount++
@@ -103,35 +102,34 @@ class PrintersViewModel(application: Application) : AndroidViewModel(application
                                 _discoveryStatus.postValue(
                                     "✅ ${printer.displayName} (${printer.ipAddress})"
                                 )
-                                savePrinterToDb(printer)
+                                repository.saveDiscoveredPrinter(printer)
                             }
                         }
                 }
             } catch (e: TimeoutCancellationException) {
-                android.util.Log.d("PrintersVM", "mDNS timeout — $mDnsCount encontradas")
+                Log.d(TAG, "mDNS timeout — $mDnsCount encontradas")
             }
 
             // Fase 2: TCP si mDNS no encontró nada
-            if (accumulated.isEmpty()) {
+            if (accumulated.isEmpty() && discovery.isLocalNetworkAvailable()) {
                 _discoveryStatus.postValue("🔎 Escaneando red por TCP…")
-                if (discovery.isLocalNetworkAvailable()) {
-                    try {
-                        discovery.scanNetworkForPrinters()
-                            .catch { e -> android.util.Log.e("PrintersVM", "TCP: ${e.message}") }
-                            .collect { printer ->
-                                if (seenIps.add(printer.ipAddress)) {
-                                    accumulated.add(printer)
-                                    _discoveryStatus.postValue("✅ TCP: ${printer.displayName} (${printer.ipAddress})")
-                                    savePrinterToDb(printer)
-                                }
+                try {
+                    discovery.scanNetworkForPrinters()
+                        .catch { e -> Log.e(TAG, "TCP: ${e.message}") }
+                        .collect { printer ->
+                            if (seenIps.add(printer.ipAddress)) {
+                                accumulated.add(printer)
+                                _discoveryStatus.postValue("✅ TCP: ${printer.displayName} (${printer.ipAddress})")
+                                repository.saveDiscoveredPrinter(printer)
                             }
-                    } catch (e: Exception) {
-                        android.util.Log.e("PrintersVM", "TCP excepción: ${e.message}")
-                    }
+                        }
+                } catch (e: Exception) {
+                    Log.e(TAG, "TCP excepción: ${e.message}")
                 }
             }
 
-            // Resultado final
+            // Resultado final — el spinner se apaga YA, sin delay artificial
+            _isDiscovering.postValue(false)
             val total = accumulated.size
             if (total > 0) {
                 _discoveryStatus.postValue("✅ $total impresora(s) encontrada(s) y guardada(s)")
@@ -149,28 +147,7 @@ class PrintersViewModel(application: Application) : AndroidViewModel(application
                     )
                 )
             }
-
-            delay(3000)
-            _isDiscovering.postValue(false)
         }
-    }
-
-    private suspend fun savePrinterToDb(info: PrinterInfo) {
-        val existing = dao.getPrinterByIp(info.ipAddress)
-        val isFirst  = dao.getPrinterCount() == 0
-        val entity   = PrinterEntity(
-            id        = existing?.id ?: 0L,
-            name      = info.displayName,
-            ipAddress = info.ipAddress,
-            ippPort   = info.ippPort,
-            ippPath   = info.ippPath,
-            esclPath  = info.esclPath,
-            model     = info.model,
-            isDefault = isFirst || (existing?.isDefault == true),
-            isOnline  = true,
-            lastSeen  = System.currentTimeMillis()
-        )
-        dao.insertPrinter(entity)
     }
 
     // ── Agregar por IP manual ─────────────────────────────────────────────────
@@ -178,119 +155,72 @@ class PrintersViewModel(application: Application) : AndroidViewModel(application
     fun addPrinterByIp(ip: String, customName: String? = null, port: Int = 631) {
         if (_isAddingByIp.value == true) return
 
-        viewModelScope.launch(Dispatchers.IO) {
-            _isAddingByIp.postValue(true)
-            _discoveryStatus.postValue("🔗 Conectando a $ip:$port…")
+        viewModelScope.launch {
+            _isAddingByIp.value = true
+            _discoveryStatus.value = "🔗 Conectando a ${ip.trim()}:$port…"
 
-            val trimmedIp = ip.trim()
-
-            // Validar formato IP
-            if (!discovery.isValidIpAddress(trimmedIp)) {
-                _discoveryStatus.postValue("❌ IP inválida: $ip")
-                _actionResult.postValue(
-                    ActionResult.Error("Dirección IP inválida: '$ip'\nEjemplo: 192.168.1.50")
-                )
-                _isAddingByIp.postValue(false)
-                return@launch
-            }
-
-            // Verificar si ya existe
-            val existing = dao.getPrinterByIp(trimmedIp)
-            if (existing != null) {
-                _discoveryStatus.postValue("ℹ️ ${existing.name} ya estaba guardada")
-                _actionResult.postValue(
-                    ActionResult.Info("'${existing.name}' ya estaba en tu lista.")
-                )
-                _isAddingByIp.postValue(false)
-                return@launch
-            }
-
-            // Intentar conectar
-            val info = discovery.connectByIp(trimmedIp, port)
-            if (info == null) {
-                _discoveryStatus.postValue("❌ No se pudo conectar a $ip")
-                _actionResult.postValue(
-                    ActionResult.Error(
-                        "No hay ninguna impresora en $ip:$port\n" +
+            when (val result = repository.addByIp(ip, customName, port)) {
+                is AddPrinterResult.Success -> {
+                    _discoveryStatus.value = "✅ ${result.printer.name} agregada"
+                    _actionResult.value =
+                        ActionResult.Success("Impresora '${result.printer.name}' agregada y guardada.")
+                    checkAllPrintersStatus()
+                }
+                is AddPrinterResult.AlreadyExists -> {
+                    _discoveryStatus.value = "ℹ️ ${result.printer.name} ya estaba guardada"
+                    _actionResult.value =
+                        ActionResult.Info("'${result.printer.name}' ya estaba en tu lista (datos actualizados).")
+                }
+                AddPrinterResult.InvalidIp -> {
+                    _discoveryStatus.value = "❌ IP inválida: $ip"
+                    _actionResult.value =
+                        ActionResult.Error("Dirección IP inválida: '$ip'\nEjemplo: 192.168.1.50")
+                }
+                is AddPrinterResult.Unreachable -> {
+                    _discoveryStatus.value = "❌ No se pudo conectar a ${result.ip}"
+                    _actionResult.value = ActionResult.Error(
+                        "No hay ninguna impresora en ${result.ip}:$port\n" +
                                 "• Verifica que la IP sea correcta\n" +
                                 "• Confirma que esté encendida y en la misma red"
                     )
-                )
-                _isAddingByIp.postValue(false)
-                return@launch
+                }
+                is AddPrinterResult.Error -> {
+                    _discoveryStatus.value = "❌ Error: ${result.message}"
+                    _actionResult.value = ActionResult.Error(result.message)
+                }
             }
-
-            // Guardar en DB
-            val isFirst = dao.getPrinterCount() == 0
-            val entity  = PrinterEntity(
-                name      = customName?.trim()?.takeIf { it.isNotBlank() } ?: info.displayName,
-                ipAddress = trimmedIp,
-                ippPort   = port,
-                ippPath   = info.ippPath,
-                esclPath  = info.esclPath,
-                model     = info.model,
-                isDefault = isFirst,
-                isOnline  = true,
-                lastSeen  = System.currentTimeMillis()
-            )
-            val savedId = dao.insertPrinter(entity)
-            val saved   = dao.getPrinterById(savedId)
-
-            _discoveryStatus.postValue("✅ ${saved?.name ?: info.displayName} agregada")
-            _actionResult.postValue(
-                ActionResult.Success("Impresora '${saved?.name}' agregada y guardada.")
-            )
-            checkAllPrintersStatus()
-            delay(2000)
-            _isAddingByIp.postValue(false)
+            _isAddingByIp.value = false
         }
     }
 
     // ── Gestión ───────────────────────────────────────────────────────────────
 
     fun setDefaultPrinter(printerId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.clearDefaultPrinter()
-            dao.setDefaultPrinter(printerId)
-            _actionResult.postValue(ActionResult.Success("Impresora predeterminada actualizada."))
+        viewModelScope.launch {
+            repository.setDefault(printerId)
+            _actionResult.value = ActionResult.Success("Impresora predeterminada actualizada.")
         }
     }
 
     fun deletePrinter(printer: PrinterEntity) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val wasDefault = printer.isDefault
-            dao.deletePrinter(printer)
-            if (wasDefault) {
-                // Asignar la siguiente disponible como predeterminada
-                dao.getAllPrintersOnce().firstOrNull()?.let { next ->
-                    dao.setDefaultPrinter(next.id)
-                }
-            }
-            _actionResult.postValue(ActionResult.Info("'${printer.name}' eliminada del registro."))
+        viewModelScope.launch {
+            repository.deletePrinter(printer)
+            _actionResult.value = ActionResult.Info("'${printer.name}' eliminada del registro.")
         }
     }
 
     fun renamePrinter(printer: PrinterEntity, newName: String) {
         if (newName.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.updatePrinter(printer.copy(name = newName.trim()))
+        viewModelScope.launch {
+            repository.renamePrinter(printer, newName)
         }
     }
 
     // ── Estado IPP ────────────────────────────────────────────────────────────
 
     fun checkAllPrintersStatus() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val printers = dao.getAllPrintersOnce()
-            val results  = mutableMapOf<Long, PrinterStatus?>()
-            printers.forEach { printer ->
-                val status = runCatching {
-                    ippClient.getPrinterStatus(printer.ippUrl)
-                }.getOrNull()
-                results[printer.id] = status
-                dao.updatePrinterOnlineStatus(printer.id, status != null)
-            }
-            _printerStatuses.postValue(results)
+        viewModelScope.launch {
+            _printerStatuses.value = repository.checkAllPrinters()
         }
     }
 

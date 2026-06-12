@@ -209,7 +209,4 @@
 <string name="dialog_no_printer_msg">No se ha encontrado ninguna impresora. ¿Deseas buscar ahora?</string>
 <string name="dialog_search">Buscar</string>
 
-    <!-- FileProvider authority -->
-<string name="file_provider_authority">com.example.epsonprintapp.fileprovider</string>
-
     </resources>

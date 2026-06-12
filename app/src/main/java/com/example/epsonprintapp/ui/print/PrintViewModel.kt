@@ -1,8 +1,8 @@
 package com.example.epsonprintapp.ui.print
 
 import android.app.Application
-import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
@@ -14,26 +14,42 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.example.epsonprintapp.AppConstants
-import com.example.epsonprintapp.database.AppDatabase
+import com.example.epsonprintapp.appContainer
 import com.example.epsonprintapp.database.entities.PrintJobEntity
-import com.example.epsonprintapp.notifications.AppNotificationManager
 import com.example.epsonprintapp.printer.ColorMode
 import com.example.epsonprintapp.printer.DuplexMode
-import com.example.epsonprintapp.printer.IppClient
 import com.example.epsonprintapp.printer.PaperSize
 import com.example.epsonprintapp.printer.PrintOptions
 import com.example.epsonprintapp.printer.PrintQuality
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import kotlin.math.sqrt
 
+/**
+ * PrintViewModel — Flujo de impresión.
+ *
+ * Pensado para la Epson L3560 (compatible con otras impresoras IPP):
+ * - La L3560 no rasteriza PDF: los PDF se convierten a JPEG página por página.
+ * - PNG se convierte a JPEG (mejor compatibilidad con el firmware Epson).
+ * - El tamaño de papel por defecto es A4, pero el papel real cargado
+ *   (media-ready) que reporta la impresora siempre tiene prioridad.
+ *
+ * Notas de diseño:
+ * - NO recibe Context de la Activity: usa el Application context propio
+ *   (un Context de Activity retenido durante una impresión de minutos
+ *   fugaría toda la jerarquía de vistas al rotar).
+ * - Los documentos se envían en streaming (proveedor de InputStream que
+ *   se reabre en cada reintento) — nunca se cargan completos en RAM.
+ */
 class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val database            = AppDatabase.getInstance(application)
-    private val ippClient           = IppClient(application)
-    private val notificationManager = AppNotificationManager(application)
+    private val container           = application.appContainer
+    private val database            = container.database
+    private val repository          = container.printerRepository
+    private val ippClient           = container.ippClient
+    private val notificationManager = container.notificationManager
 
     // ── UI State ───────────────────────────────────────────────────────────────
 
@@ -66,10 +82,11 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Selección de archivo ───────────────────────────────────────────────────
 
-    fun onFileSelected(uri: Uri, context: Context) {
+    fun onFileSelected(uri: Uri) {
+        val app = getApplication<Application>()
         _selectedFileUri.value  = uri
-        _selectedFileName.value = getFileName(uri, context)
-        val mime = context.contentResolver.getType(uri)
+        _selectedFileName.value = getFileName(uri)
+        val mime = app.contentResolver.getType(uri)
         if (mime != null && !isMimeSupported(mime)) {
             _errorMessage.value = "Formato no soportado: $mime\nSoportados: PDF, JPEG, PNG"
         }
@@ -94,28 +111,35 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Impresión ──────────────────────────────────────────────────────────────
 
-    fun startPrinting(context: Context) {
+    fun startPrinting() {
         val uri = _selectedFileUri.value ?: run {
             _errorMessage.value = "No hay archivo seleccionado"
             return
         }
+        if (_isPrinting.value == true) return
+
+        val app = getApplication<Application>()
 
         viewModelScope.launch(Dispatchers.IO) {
             _isPrinting.postValue(true)
             _printProgress.postValue(5)
 
             try {
-                // 1. Validar tamaño de archivo antes de cargarlo en memoria
-                val fileSize = getFileSize(uri, context)
+                // 1. Validar tamaño de archivo
+                val fileSize = getFileSize(uri)
+                if (fileSize <= 0L) {
+                    _errorMessage.postValue("El archivo está vacío o no se puede leer")
+                    return@launch
+                }
                 if (fileSize > AppConstants.MAX_FILE_SIZE_BYTES) {
                     val mb = fileSize / (1024 * 1024)
                     _errorMessage.postValue(
-                        "Archivo demasiado grande: ${mb} MB\nMáximo permitido: ${AppConstants.MAX_FILE_SIZE_MB} MB")
+                        "Archivo demasiado grande: $mb MB\nMáximo permitido: ${AppConstants.MAX_FILE_SIZE_MB} MB")
                     return@launch
                 }
 
                 // 2. Obtener impresora
-                val printer = database.printerDao().getDefaultPrinter() ?: run {
+                val printer = repository.getDefaultPrinter() ?: run {
                     _errorMessage.postValue("No hay impresora configurada. Ve al Dashboard y busca una.")
                     return@launch
                 }
@@ -134,19 +158,19 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
                 _printProgress.postValue(25)
 
                 // 4. Resolver opciones finales
-                val userOpts   = _printOptions.value ?: PrintOptions()
-                val finalOpts  = if (detectedPaper != null && userOpts.paperSize == PrintOptions().paperSize)
+                val userOpts  = _printOptions.value ?: PrintOptions()
+                val finalOpts = if (detectedPaper != null && userOpts.paperSize == PrintOptions().paperSize)
                     userOpts.copy(paperSize = detectedPaper) else userOpts
 
-                val mimeType   = context.contentResolver.getType(uri)
-                    ?: guessMime(uri)
-                val fileName   = _selectedFileName.value ?: "documento"
+                val mimeType = normalizeMime(app.contentResolver.getType(uri) ?: guessMime(uri))
+                val fileName = _selectedFileName.value ?: "documento"
 
                 // 5. Registrar en DB
                 val job = PrintJobEntity(
                     printerId  = printer.id,
                     fileName   = fileName,
                     mimeType   = mimeType,
+                    fileSize   = fileSize,
                     status     = "PROCESSING",
                     copies     = finalOpts.copies,
                     colorMode  = finalOpts.colorMode.name,
@@ -158,9 +182,9 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
                 // 6. Enviar según tipo
                 if (mimeType == "application/pdf") {
-                    sendPdfAsImages(context, uri, printer.ippUrl, finalOpts, fileName)
+                    sendPdfAsImages(uri, printer.ippUrl, finalOpts, fileName)
                 } else {
-                    sendImageFile(context, uri, mimeType, printer.ippUrl, finalOpts, fileName)
+                    sendImageFile(uri, mimeType, printer.ippUrl, finalOpts, fileName)
                 }
 
             } catch (e: Exception) {
@@ -173,20 +197,21 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Rasteriza el PDF página por página y envía cada una como JPEG.
-     * Libera cada bitmap en el finally para garantizar que no queden en memoria.
+     * (La L3560 no acepta PDF directamente.)
+     * Cada bitmap se libera en el finally — nunca hay más de uno en memoria.
      */
     private suspend fun sendPdfAsImages(
-        context:    Context,
-        uri:        Uri,
-        url:        String,
-        options:    PrintOptions,
-        fileName:   String
+        uri:      Uri,
+        url:      String,
+        options:  PrintOptions,
+        fileName: String
     ) {
+        val app = getApplication<Application>()
         var pfd:      ParcelFileDescriptor? = null
         var renderer: PdfRenderer?          = null
 
         try {
-            pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            pfd = app.contentResolver.openFileDescriptor(uri, "r")
                 ?: run { handleError("No se pudo abrir el PDF"); return }
 
             renderer      = PdfRenderer(pfd)
@@ -198,17 +223,16 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
             val dpi = AppConstants.PDF_RASTER_DPI
             val (targetW, targetH) = when (options.paperSize) {
-                PaperSize.A4        -> Pair((8.27 * dpi).toInt(),  (11.69 * dpi).toInt())
-                PaperSize.LETTER    -> Pair((8.5  * dpi).toInt(),  (11.0  * dpi).toInt())
-                PaperSize.A3        -> Pair((11.69 * dpi).toInt(), (16.54 * dpi).toInt())
-                PaperSize.A5        -> Pair((5.83 * dpi).toInt(),  (8.27  * dpi).toInt())
-                PaperSize.LEGAL     -> Pair((8.5  * dpi).toInt(),  (14.0  * dpi).toInt())
-                PaperSize.PHOTO_4X6 -> Pair((4    * dpi).toInt(),  (6     * dpi).toInt())
+                PaperSize.A4        -> (8.27 * dpi).toInt()  to (11.69 * dpi).toInt()
+                PaperSize.LETTER    -> (8.5  * dpi).toInt()  to (11.0  * dpi).toInt()
+                PaperSize.LEGAL     -> (8.5  * dpi).toInt()  to (14.0  * dpi).toInt()
+                PaperSize.A5        -> (5.83 * dpi).toInt()  to (8.27  * dpi).toInt()
+                PaperSize.A3        -> (11.69 * dpi).toInt() to (16.54 * dpi).toInt()
+                PaperSize.PHOTO_4X6 -> (4    * dpi).toInt()  to (6     * dpi).toInt()
             }
 
             for (pageIndex in 0 until pageCount) {
-                val progressStart = 45 + (pageIndex * 45 / pageCount)
-                _printProgress.postValue(progressStart)
+                _printProgress.postValue(45 + (pageIndex * 45 / pageCount))
 
                 var bitmap: Bitmap? = null
                 val page            = renderer.openPage(pageIndex)
@@ -217,17 +241,17 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
                     val aspect       = page.width.toFloat() / page.height.toFloat()
                     val targetAspect = targetW.toFloat() / targetH.toFloat()
                     val (rW, rH)     = if (aspect > targetAspect)
-                        Pair(targetW, (targetW / aspect).toInt())
+                        targetW to (targetW / aspect).toInt()
                     else
-                        Pair((targetH * aspect).toInt(), targetH)
+                        (targetH * aspect).toInt() to targetH
 
                     // Limitar resolución para evitar OOM
                     val maxPixels = 2048 * 2048
                     val pixels    = rW * rH
                     val (finalW, finalH) = if (pixels > maxPixels) {
                         val scale = sqrt(maxPixels.toDouble() / pixels)
-                        Pair((rW * scale).toInt(), (rH * scale).toInt())
-                    } else Pair(rW, rH)
+                        (rW * scale).toInt() to (rH * scale).toInt()
+                    } else rW to rH
 
                     bitmap = Bitmap.createBitmap(finalW, finalH, Bitmap.Config.ARGB_8888)
                     Canvas(bitmap).drawColor(Color.WHITE)
@@ -235,8 +259,9 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
                     val jpegBytes = bitmapToJpeg(bitmap)
 
-                    val result = ippClient.printDocument(
-                        url, jpegBytes.inputStream(), "image/jpeg", options)
+                    val result = ippClient.printDocument(url, "image/jpeg", options) {
+                        jpegBytes.inputStream()
+                    }
 
                     if (result == null || !result.success) {
                         val msg = result?.errorMessage ?: "Error al enviar página ${pageIndex + 1}"
@@ -263,49 +288,45 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Envía imagen directamente. PNG se convierte a JPEG para máxima compatibilidad.
+     * Envía imagen en streaming directo desde el ContentResolver.
+     * PNG se convierte a JPEG (la L3560 a veces rechaza PNG con HTTP 500).
      */
     private suspend fun sendImageFile(
-        context:  Context,
         uri:      Uri,
         mimeType: String,
         url:      String,
         options:  PrintOptions,
         fileName: String
     ) {
+        val app = getApplication<Application>()
         _printProgress.postValue(50)
 
-        val inputStream = context.contentResolver.openInputStream(uri)
-        if (inputStream == null) {
-            handleError("No se pudo abrir el archivo seleccionado")
-            return
-        }
-
-        val (finalStream, finalMime) = if (mimeType == "image/png") {
-            Pair(convertPngToJpeg(inputStream), "image/jpeg")
+        // Proveedor de stream: se reabre en cada reintento del IppClient,
+        // sin retener el documento en memoria entre intentos.
+        val (finalMime, source) = if (mimeType == "image/png") {
+            val jpegBytes = withContext(Dispatchers.IO) {
+                app.contentResolver.openInputStream(uri)?.use { convertPngToJpeg(it.readBytes()) }
+            } ?: run { handleError("No se pudo abrir el archivo seleccionado"); return }
+            "image/jpeg" to { jpegBytes.inputStream() }
         } else {
-            Pair(inputStream, mimeType)
+            mimeType to { app.contentResolver.openInputStream(uri) }
         }
 
         _printProgress.postValue(65)
 
-        try {
-            val result = ippClient.printDocument(url, finalStream, finalMime, options)
-            _printProgress.postValue(90)
+        val result = ippClient.printDocument(url, finalMime, options, source)
+        _printProgress.postValue(90)
 
-            if (result != null && result.success) {
-                database.printJobDao().markJobCompleted(currentJobId)
-                notificationManager.notifyPrintSuccess(fileName, currentJobId)
-                _printSuccess.postValue(true)
-                _printProgress.postValue(100)
-            } else {
-                val msg = result?.errorMessage
-                    ?: "Error desconocido (0x${result?.statusCode?.toString(16) ?: "?"})"
-                handleError(msg)
-                notificationManager.notifyPrintError(msg, fileName, currentJobId)
-            }
-        } finally {
-            runCatching { finalStream.close() }
+        if (result != null && result.success) {
+            database.printJobDao().markJobCompleted(currentJobId)
+            notificationManager.notifyPrintSuccess(fileName, currentJobId)
+            _printSuccess.postValue(true)
+            _printProgress.postValue(100)
+        } else {
+            val msg = result?.errorMessage
+                ?: "Error desconocido (0x${result?.statusCode?.toString(16) ?: "?"})"
+            handleError(msg)
+            notificationManager.notifyPrintError(msg, fileName, currentJobId)
         }
     }
 
@@ -317,61 +338,67 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
         return out.toByteArray()
     }
 
-    private fun convertPngToJpeg(inputStream: InputStream): InputStream {
-        val original = android.graphics.BitmapFactory.decodeStream(inputStream)
+    private fun convertPngToJpeg(pngBytes: ByteArray): ByteArray {
+        val original = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
         val bgBitmap = Bitmap.createBitmap(original.width, original.height, Bitmap.Config.ARGB_8888)
         Canvas(bgBitmap).apply {
-            drawColor(Color.WHITE)
+            drawColor(Color.WHITE)   // fondo blanco para PNG con transparencia
             drawBitmap(original, 0f, 0f, null)
         }
         original.recycle()
         val out = ByteArrayOutputStream()
         bgBitmap.compress(Bitmap.CompressFormat.JPEG, AppConstants.JPEG_QUALITY, out)
         bgBitmap.recycle()
-        return out.toByteArray().inputStream()
+        return out.toByteArray()
     }
 
+    /** La L3560 (EcoTank) usa A4 como papel estándar; las HP de la región, Letter. */
     private fun detectPaper(model: String?): PaperSize? {
         val m = model?.lowercase() ?: return null
         return when {
             m.contains("hp") || m.contains("smart tank") ||
                     m.contains("deskjet") || m.contains("officejet") -> PaperSize.LETTER
-            m.contains("epson") || m.contains("ecotank")     -> PaperSize.A4
-            else                                              -> null
+            m.contains("epson") || m.contains("ecotank")             -> PaperSize.A4
+            else                                                     -> null
         }
     }
 
-    private fun getFileSize(uri: Uri, context: Context): Long {
-        return context.contentResolver.query(
+    private fun getFileSize(uri: Uri): Long {
+        return getApplication<Application>().contentResolver.query(
             uri, arrayOf(OpenableColumns.SIZE), null, null, null
         )?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getLong(0) else 0L
         } ?: 0L
     }
 
-    private fun getFileName(uri: Uri, context: Context): String {
+    private fun getFileName(uri: Uri): String {
         var name = "documento"
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0) name = cursor.getString(idx)
+        getApplication<Application>().contentResolver
+            .query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) name = cursor.getString(idx)
+                }
             }
-        }
         return name
     }
 
     private fun guessMime(uri: Uri): String {
         val ext = uri.path?.substringAfterLast(".")?.lowercase() ?: ""
         return when (ext) {
-            "pdf"        -> "application/pdf"
-            "jpg","jpeg" -> "image/jpeg"
-            "png"        -> "image/png"
-            else         -> "application/pdf"
+            "pdf"         -> "application/pdf"
+            "jpg", "jpeg" -> "image/jpeg"
+            "png"         -> "image/png"
+            else          -> "application/pdf"
         }
     }
 
+    /** "image/jpg" no es un MIME real: el firmware Epson espera "image/jpeg". */
+    private fun normalizeMime(mime: String): String =
+        if (mime == "image/jpg") "image/jpeg" else mime
+
     private fun isMimeSupported(mime: String) =
-        mime in listOf("application/pdf", "image/jpeg", "image/jpg", "image/png")
+        normalizeMime(mime) in listOf("application/pdf", "image/jpeg", "image/png")
 
     private suspend fun handleError(msg: String) {
         if (currentJobId > 0) database.printJobDao().updateJobStatus(currentJobId, "FAILED", msg)
@@ -380,9 +407,4 @@ class PrintViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearError()        { _errorMessage.value = null }
     fun resetPrintSuccess() { _printSuccess.value = false }
-
-    override fun onCleared() {
-        super.onCleared()
-        notificationManager.cancel()
-    }
 }

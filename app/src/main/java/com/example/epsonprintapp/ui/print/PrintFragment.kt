@@ -37,7 +37,7 @@ class PrintFragment : Fragment() {
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (_: Exception) {}
-            viewModel.onFileSelected(selectedUri, requireContext())
+            viewModel.onFileSelected(selectedUri)
         }
     }
 
@@ -57,13 +57,24 @@ class PrintFragment : Fragment() {
     }
 
     private fun setupSpinners() {
-        val sizes = listOf("A4 (210×297 mm)", "Carta / Letter (216×279 mm)", "A3 (297×420 mm)", "Foto 4×6\"")
+        // Tamaños que la Epson L3560 soporta (máximo A4 — sin A3)
+        val sizes = listOf(
+            "A4 (210×297 mm)",
+            "Carta / Letter (216×279 mm)",
+            "Legal / Oficio (216×356 mm)",
+            "A5 (148×210 mm)",
+            "Foto 4×6\""
+        )
         binding.spinnerPaperSize.adapter = ArrayAdapter(
             requireContext(), android.R.layout.simple_spinner_item, sizes
         ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         binding.spinnerPaperSize.onItemSelectedListener = spinnerListener { pos ->
             viewModel.updateOptions(paperSize = when (pos) {
-                0 -> PaperSize.A4; 1 -> PaperSize.LETTER; 2 -> PaperSize.A3; else -> PaperSize.PHOTO_4X6
+                0    -> PaperSize.A4
+                1    -> PaperSize.LETTER
+                2    -> PaperSize.LEGAL
+                3    -> PaperSize.A5
+                else -> PaperSize.PHOTO_4X6
             })
         }
 
@@ -133,8 +144,19 @@ class PrintFragment : Fragment() {
 
         viewModel.detectedPaperSize.observe(viewLifecycleOwner) { paper ->
             if (paper != null) {
-                val pos  = when (paper) { PaperSize.A4 -> 0; PaperSize.LETTER -> 1; PaperSize.A3 -> 2; else -> 1 }
-                val name = when (paper) { PaperSize.A4 -> "A4"; PaperSize.LETTER -> "Carta / Letter"; else -> paper.name }
+                val pos = when (paper) {
+                    PaperSize.A4     -> 0
+                    PaperSize.LETTER -> 1
+                    PaperSize.LEGAL  -> 2
+                    PaperSize.A5     -> 3
+                    else             -> 0
+                }
+                val name = when (paper) {
+                    PaperSize.A4     -> "A4"
+                    PaperSize.LETTER -> "Carta / Letter"
+                    PaperSize.LEGAL  -> "Legal / Oficio"
+                    else             -> paper.name
+                }
                 binding.spinnerPaperSize.setSelection(pos)
                 binding.tvPrintStatus.text = "ℹ️ Papel detectado: $name"
             }
@@ -186,7 +208,7 @@ class PrintFragment : Fragment() {
                 "application/pdf", "image/jpeg", "image/jpg", "image/png"
             ))
         }
-        binding.btnPrint.setOnClickListener { viewModel.startPrinting(requireContext()) }
+        binding.btnPrint.setOnClickListener { viewModel.startPrinting() }
     }
 
     private fun showFilePreview(uri: Uri) {
@@ -207,23 +229,23 @@ class PrintFragment : Fragment() {
         binding.imagePreview.isVisible = true
         try {
             requireContext().contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
-                val renderer  = android.graphics.pdf.PdfRenderer(descriptor)
-                val pageCount = renderer.pageCount
-                binding.tvPrintStatus.text =
-                    "📄 PDF · $pageCount ${if (pageCount == 1) "página" else "páginas"}"
-                if (pageCount > 0) {
-                    val page    = renderer.openPage(0)
-                    val targetW = 600
-                    val targetH = (targetW.toFloat() * page.height / page.width.coerceAtLeast(1)).toInt()
-                    val bitmap  = android.graphics.Bitmap.createBitmap(
-                        targetW, targetH, android.graphics.Bitmap.Config.ARGB_8888)
-                    android.graphics.Canvas(bitmap).drawColor(android.graphics.Color.WHITE)
-                    page.render(bitmap, null, null,
-                        android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                    page.close()
-                    binding.imagePreview.setImageBitmap(bitmap)
+                android.graphics.pdf.PdfRenderer(descriptor).use { renderer ->
+                    val pageCount = renderer.pageCount
+                    binding.tvPrintStatus.text =
+                        "📄 PDF · $pageCount ${if (pageCount == 1) "página" else "páginas"}"
+                    if (pageCount > 0) {
+                        renderer.openPage(0).use { page ->
+                            val targetW = 600
+                            val targetH = (targetW.toFloat() * page.height / page.width.coerceAtLeast(1)).toInt()
+                            val bitmap  = android.graphics.Bitmap.createBitmap(
+                                targetW, targetH, android.graphics.Bitmap.Config.ARGB_8888)
+                            android.graphics.Canvas(bitmap).drawColor(android.graphics.Color.WHITE)
+                            page.render(bitmap, null, null,
+                                android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            binding.imagePreview.setImageBitmap(bitmap)
+                        }
+                    }
                 }
-                renderer.close()
             }
         } catch (e: Exception) {
             binding.tvPrintStatus.text = "📄 Documento PDF"

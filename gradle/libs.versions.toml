@@ -1,7 +1,9 @@
 [versions]
-agp          = "8.7.3"
-kotlin       = "2.0.21"
-ksp          = "2.0.21-1.0.28"
+# AGP 9.x es requerido por Gradle 9.3.1 (el wrapper de este proyecto).
+# AGP 8.7.x NO es compatible con Gradle 9 — no bajar esta versión sin bajar también el wrapper.
+agp          = "9.0.0"
+kotlin       = "2.2.20"
+ksp          = "2.2.20-2.0.4"
 coreKtx      = "1.15.0"
 appcompat    = "1.7.0"
 material     = "1.12.0"
@@ -10,15 +12,12 @@ fragment     = "1.8.6"
 constraintlayout = "2.2.1"
 lifecycle    = "2.8.7"
 navigation   = "2.8.9"
-room         = "2.6.1"
-coroutines   = "1.9.0"
+room         = "2.7.2"
+coroutines   = "1.10.2"
 okhttp       = "4.12.0"
 glide        = "4.16.0"
-ucrop        = "2.2.8"
-workmanager  = "2.10.0"
 swiperefresh = "1.1.0"
 recyclerview = "1.4.0"
-multidex     = "2.0.1"
 junit        = "4.13.2"
 junitExt     = "1.2.1"
 espresso     = "3.6.1"
@@ -30,7 +29,6 @@ material                    = { group = "com.google.android.material",  name = "
 androidx-activity           = { group = "androidx.activity",            name = "activity-ktx",               version.ref = "activity" }
 androidx-fragment           = { group = "androidx.fragment",            name = "fragment-ktx",               version.ref = "fragment" }
 androidx-constraintlayout   = { group = "androidx.constraintlayout",   name = "constraintlayout",           version.ref = "constraintlayout" }
-androidx-multidex           = { group = "androidx.multidex",            name = "multidex",                   version.ref = "multidex" }
 lifecycle-viewmodel         = { group = "androidx.lifecycle",           name = "lifecycle-viewmodel-ktx",    version.ref = "lifecycle" }
 lifecycle-livedata          = { group = "androidx.lifecycle",           name = "lifecycle-livedata-ktx",     version.ref = "lifecycle" }
 lifecycle-runtime           = { group = "androidx.lifecycle",           name = "lifecycle-runtime-ktx",      version.ref = "lifecycle" }
@@ -44,9 +42,6 @@ coroutines-core             = { group = "org.jetbrains.kotlinx",        name = "
 okhttp                      = { group = "com.squareup.okhttp3",         name = "okhttp",                     version.ref = "okhttp" }
 okhttp-logging              = { group = "com.squareup.okhttp3",         name = "logging-interceptor",        version.ref = "okhttp" }
 glide                       = { group = "com.github.bumptech.glide",    name = "glide",                      version.ref = "glide" }
-glide-ksp                   = { group = "com.github.bumptech.glide",    name = "ksp",                        version.ref = "glide" }
-ucrop                       = { group = "com.github.yalantis",          name = "ucrop",                      version.ref = "ucrop" }
-workmanager                 = { group = "androidx.work",                name = "work-runtime-ktx",           version.ref = "workmanager" }
 androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout",  name = "swiperefreshlayout",         version.ref = "swiperefresh" }
 androidx-recyclerview       = { group = "androidx.recyclerview",        name = "recyclerview",               version.ref = "recyclerview" }
 junit                       = { group = "junit",                        name = "junit",                      version.ref = "junit" }

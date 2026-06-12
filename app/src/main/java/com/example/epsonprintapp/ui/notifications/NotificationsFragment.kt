@@ -14,20 +14,14 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.epsonprintapp.R
-import com.example.epsonprintapp.database.AppDatabase
 import com.example.epsonprintapp.database.entities.NotificationEntity
-import com.example.epsonprintapp.ui.ViewModelFactory
 import java.text.SimpleDateFormat
 import java.util.*
 
 class NotificationsFragment : Fragment() {
 
-    private val viewModel: NotificationsViewModel by viewModels {
-        ViewModelFactory(
-            application = requireActivity().application,
-            database    = AppDatabase.getInstance(requireContext())
-        )
-    }
+    // AndroidViewModel: la factory por defecto resuelve el constructor (Application)
+    private val viewModel: NotificationsViewModel by viewModels()
 
     private lateinit var recyclerView:  RecyclerView
     private lateinit var emptyLayout:   View
@@ -83,7 +77,7 @@ class NotificationsFragment : Fragment() {
             ) = false
 
             override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {
-                val pos         = vh.adapterPosition
+                val pos         = vh.bindingAdapterPosition
                 val currentList = adapter.getCurrentItems()
                 if (pos >= 0 && pos < currentList.size) {
                     viewModel.deleteNotification(currentList[pos].id)

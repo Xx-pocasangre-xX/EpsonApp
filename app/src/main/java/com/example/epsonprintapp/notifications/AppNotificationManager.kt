@@ -13,32 +13,25 @@ import com.example.epsonprintapp.database.entities.NotificationEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * AppNotificationManager — Gestiona notificaciones del sistema y base de datos.
+ * AppNotificationManager — Gestiona notificaciones del sistema y su historial en BD.
  *
- * Corrección: el CoroutineScope anterior usaba CoroutineScope(Dispatchers.IO)
- * sin SupervisorJob ni forma de cancelarlo, creando un scope huérfano que vivía
- * indefinidamente. Ahora usa SupervisorJob() para poder cancelarlo con cancel().
- *
- * Uso: llamar cancel() cuando el componente propietario se destruya.
- * En la práctica, esta clase se usa desde ViewModels que tienen viewModelScope,
- * por lo que el scope de este manager es redundante y se puede delegar.
- * Lo mantenemos encapsulado aquí para no cambiar la interfaz pública.
+ * Instancia ÚNICA a nivel de aplicación (vive en AppContainer). El scope
+ * propio dura lo mismo que el proceso: no es una fuga, es intencional —
+ * el guardado del historial no debe cancelarse porque una pantalla se cierre.
+ * SupervisorJob evita que el fallo de una inserción cancele las demás.
  */
-class AppNotificationManager(private val context: Context) {
+class AppNotificationManager(
+    private val context:  Context,
+    private val database: AppDatabase
+) {
 
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-    private val database = AppDatabase.getInstance(context)
-
-    // SupervisorJob permite cancelar el scope externamente y no propaga
-    // fallos de una coroutine a las demás del mismo scope
-    private val job   = SupervisorJob()
-    private val scope = CoroutineScope(Dispatchers.IO + job)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     companion object {
         const val NOTIF_ID_PRINTING = 1001
@@ -185,13 +178,5 @@ class AppNotificationManager(private val context: Context) {
         reason.contains("404")                            -> Pair("Escaneo cancelado",       "Intenta de nuevo")
         reason.contains("timeout")                        -> Pair("Tiempo de espera agotado","Verifica la conexión WiFi")
         else -> Pair("Error: $reason", "Verifica la conexión e intenta de nuevo")
-    }
-
-    /**
-     * Cancelar el scope cuando el propietario se destruya.
-     * Llamar desde onCleared() del ViewModel que crea esta instancia.
-     */
-    fun cancel() {
-        job.cancel()
     }
 }

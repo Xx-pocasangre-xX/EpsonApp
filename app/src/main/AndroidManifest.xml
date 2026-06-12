@@ -2,10 +2,10 @@
 <!--
     AndroidManifest.xml
     Define permisos, actividades y configuración de la app.
-    Para comunicarse con impresoras en red local necesitamos permisos especiales.
+    Para comunicarse con impresoras en red local (Epson L3560 vía IPP/eSCL)
+    necesitamos permisos de red y, para mDNS, de ubicación.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- ===== PERMISOS DE RED ===== -->
     <!-- Acceso a internet para comunicar con impresora vía IPP/eSCL -->
@@ -15,28 +15,17 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Necesario para mDNS/NSD (Network Service Discovery) -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <!-- Para obtener IP del router (gateway) -->
+    <!-- Requerido por Android para descubrir servicios mDNS en la red local -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- ===== PERMISOS DE ALMACENAMIENTO ===== -->
-    <!-- Leer archivos para imprimir (PDF, imágenes) -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <!-- Android 13+ usa permisos granulares -->
+    <!-- minSdk = 33: solo aplican los permisos granulares de Android 13+.
+         Solo imágenes: la app imprime PDF/JPEG/PNG, no usa video. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <!-- Escribir en almacenamiento (para guardar escaneos) -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28"
-        tools:ignore="ScopedStorage" />
 
     <!-- ===== PERMISOS DE NOTIFICACIONES ===== -->
-    <!-- Android 13+ requiere permiso explícito para notificaciones -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Para WorkManager en segundo plano -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- ===== CAPACIDADES REQUERIDAS ===== -->
     <uses-feature
@@ -53,12 +42,11 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.EpsonPrint"
-        android:usesCleartextTraffic="true"
-        tools:targetApi="31">
+        android:usesCleartextTraffic="true">
         <!--
             IMPORTANTE: android:usesCleartextTraffic="true"
-            La impresora Epson usa HTTP (no HTTPS) en la red local.
-            IPP en puerto 631 y eSCL en puerto 80 usan HTTP plano.
+            La Epson L3560 usa HTTP (no HTTPS) en la red local:
+            IPP en puerto 631 y eSCL en puerto 80 son HTTP plano.
             Sin esto, Android bloquearía las conexiones desde Android 9+.
         -->
 
@@ -72,32 +60,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- ===== PROVEEDOR DE ARCHIVOS ===== -->
-        <!--
-            FileProvider: Necesario para compartir archivos escaneados con otras apps
-            y para usar la galería de Android sin exponer rutas directas.
-        -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_provider_paths" />
-        </provider>
-
-        <!-- ===== WORK MANAGER (para tareas en segundo plano) ===== -->
-        <provider
-            android:name="androidx.startup.InitializationProvider"
-            android:authorities="${applicationId}.androidx-startup"
-            android:exported="false"
-            tools:node="merge">
-            <meta-data
-                android:name="androidx.work.WorkManagerInitializer"
-                android:value="androidx.startup" />
-        </provider>
 
     </application>
 

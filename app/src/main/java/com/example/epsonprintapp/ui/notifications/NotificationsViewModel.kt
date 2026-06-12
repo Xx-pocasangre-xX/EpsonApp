@@ -1,7 +1,12 @@
 package com.example.epsonprintapp.ui.notifications
 
-import androidx.lifecycle.*
-import com.example.epsonprintapp.database.AppDatabase
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.asLiveData
+import androidx.lifecycle.viewModelScope
+import com.example.epsonprintapp.appContainer
 import com.example.epsonprintapp.database.entities.NotificationEntity
 import kotlinx.coroutines.launch
 
@@ -12,17 +17,19 @@ import kotlinx.coroutines.launch
  * (impresión exitosa, error, tinta baja, etc.). Este ViewModel las expone
  * como LiveData para que el Fragment las muestre en un RecyclerView.
  */
-class NotificationsViewModel(private val database: AppDatabase) : ViewModel() {
+class NotificationsViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val notificationDao = application.appContainer.database.notificationDao()
 
     // ── LiveData expuesto al Fragment ───────────────────────────────────────────
 
     /** Lista completa de notificaciones (más recientes primero) */
     val notifications: LiveData<List<NotificationEntity>> =
-        database.notificationDao().getAllNotifications().asLiveData()
+        notificationDao.getAllNotifications().asLiveData()
 
     /** Conteo de notificaciones no leídas (para el badge) */
     val unreadCount: LiveData<Int> =
-        database.notificationDao().getUnreadCount().asLiveData()
+        notificationDao.getUnreadCount().asLiveData()
 
     /** Mensaje de estado para operaciones de borrado/marcado */
     private val _statusMessage = MutableLiveData<String?>()
@@ -30,41 +37,32 @@ class NotificationsViewModel(private val database: AppDatabase) : ViewModel() {
 
     // ── Acciones del usuario ────────────────────────────────────────────────────
 
-    /**
-     * Marcar todas las notificaciones como leídas.
-     * Se llama cuando el usuario abre la pantalla de notificaciones.
-     */
+    /** Marcar todas como leídas (al abrir la pantalla de notificaciones). */
     fun markAllAsRead() {
         viewModelScope.launch {
-            database.notificationDao().markAllAsRead()
+            notificationDao.markAllAsRead()
         }
     }
 
-    /**
-     * Marcar una notificación individual como leída.
-     */
+    /** Marcar una notificación individual como leída. */
     fun markAsRead(notificationId: Long) {
         viewModelScope.launch {
-            database.notificationDao().markAsRead(notificationId)
+            notificationDao.markAsRead(notificationId)
         }
     }
 
-    /**
-     * Eliminar una notificación por su ID.
-     */
+    /** Eliminar una notificación por su ID. */
     fun deleteNotification(notificationId: Long) {
         viewModelScope.launch {
-            database.notificationDao().deleteById(notificationId)
+            notificationDao.deleteById(notificationId)
             _statusMessage.value = "Notificación eliminada"
         }
     }
 
-    /**
-     * Limpiar todas las notificaciones.
-     */
+    /** Limpiar todas las notificaciones. */
     fun clearAll() {
         viewModelScope.launch {
-            database.notificationDao().clearAll()
+            notificationDao.clearAll()
             _statusMessage.value = "Historial borrado"
         }
     }

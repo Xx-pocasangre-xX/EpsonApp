@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -15,7 +17,7 @@ android {
         versionCode            = 1
         versionName            = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        multiDexEnabled        = true
+        // multidex eliminado: es nativo desde minSdk 21, innecesario con minSdk 33
     }
 
     buildTypes {
@@ -28,20 +30,25 @@ android {
 
     buildFeatures { viewBinding = true }
 
-    // Alineado con toolchain JDK 21
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
 
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
+}
 
-    // Exportar schema de Room para control de versiones
-    ksp {
-        arg("room.schemaLocation", "$projectDir/schemas")
-        arg("room.incremental",    "true")
+// DSL moderna de Kotlin (kotlinOptions está deprecado/eliminado en AGP 9 + Kotlin 2.2)
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
+}
+
+// Exportar schema de Room para control de versiones
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.incremental",    "true")
 }
 
 dependencies {
@@ -51,7 +58,6 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.constraintlayout)
-    implementation(libs.androidx.multidex)
     implementation(libs.lifecycle.viewmodel)
     implementation(libs.lifecycle.livedata)
     implementation(libs.lifecycle.runtime)
@@ -65,12 +71,11 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
     implementation(libs.glide)
-    ksp(libs.glide.ksp)
-    implementation(libs.ucrop)
-    implementation(libs.workmanager)
+    // glide-ksp eliminado: no hay AppGlideModule en el proyecto, el procesador no hacía nada
+    // ucrop eliminado: sin uso en el código
+    // workmanager eliminado: sin Workers en el código
     implementation(libs.androidx.swiperefreshlayout)
     implementation(libs.androidx.recyclerview)
-    // iText7 ELIMINADO — licencia AGPL. PDF generado con android.graphics.pdf.PdfDocument
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

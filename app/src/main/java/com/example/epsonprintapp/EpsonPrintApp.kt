@@ -4,20 +4,14 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
-import com.example.epsonprintapp.database.AppDatabase
 
 /**
  * EpsonPrintApp - Clase Application principal
  *
  * Se ejecuta ANTES que cualquier Activity o Service.
- * Aquí inicializamos componentes globales:
- * - Base de datos Room (singleton)
- * - Canales de notificación (requerido en Android 8+)
- *
- * Por qué usar Application class:
- * - Garantiza un único objeto Database en toda la app
- * - Evita memory leaks al no usar Context de Activity
- * - Centraliza la inicialización de SDKs y librerías
+ * Aquí viven:
+ * - El contenedor de dependencias [AppContainer] (DB, clientes de red, repositorio)
+ * - La creación de canales de notificación (requerido en Android 8+)
  */
 class EpsonPrintApp : Application() {
 
@@ -30,11 +24,8 @@ class EpsonPrintApp : Application() {
         const val CHANNEL_ALERTS = "channel_alerts"
     }
 
-    // Instancia singleton de la base de datos
-    // 'by lazy' = se crea solo cuando se accede por primera vez
-    val database: AppDatabase by lazy {
-        AppDatabase.getInstance(this)
-    }
+    /** Grafo de dependencias de la app. Lazy: se crea en el primer acceso. */
+    val container: AppContainer by lazy { AppContainer(this) }
 
     override fun onCreate() {
         super.onCreate()
